@@ -1,31 +1,26 @@
 import streamlit as st
-import pytesseract
-import fitz  # PyMuPDF
+import requests
 import pandas as pd
-from PIL import Image
 from fpdf import FPDF
 from io import BytesIO
 import re
 
-st.set_page_config(page_title="📦 Bon de Livraison OCR", layout="centered")
-st.title("📄 Extraction automatique des bons de livraison manuscrits")
+st.set_page_config(page_title="Bon de Livraison OCR", layout="centered")
+st.title("📄 Extraction de bons de livraison manuscrits (OCR cloud)")
 
-uploaded_file = st.file_uploader("Déposez un bon de livraison manuscrit (PDF scanné) :", type=["pdf"])
+OCR_API_KEY = st.secrets["OCR_SPACE_API_KEY"]
 
-def pdf_to_images(pdf_file):
-    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
-    images = []
-    for page in doc:
-        pix = page.get_pixmap(dpi=300)
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        images.append(img)
-    return images
-
-def extract_text_from_images(images):
-    text = ""
-    for img in images:
-        text += pytesseract.image_to_string(img, lang="fra") + "\n"
-    return text
+def ocr_space_file(file, api_key):
+    payload = {
+        'isOverlayRequired': False,
+        'apikey': api_key,
+        'language': 'fre',
+    }
+    files = {'file': file}
+    r = requests.post('https://api.ocr.space/parse/image',
+                      files=files,
+                      data=payload)
+    return r.json()
 
 def extract_data(text):
     pattern = r"(?i)(\d+)\s*colis.*?(\d+)\s*pi[eè]ce.*?ref(?:[ée]rence)?\s*[:\-]?\s*(\S+)"
@@ -65,13 +60,18 @@ def dataframe_to_pdf(df):
     pdf.output(buffer)
     return buffer.getvalue()
 
-if uploaded_file:
-    with st.spinner("📄 Lecture et extraction en cours..."):
-        images = pdf_to_images(uploaded_file)
-        text = extract_text_from_images(images)
-        df = extract_data(text)
-        st.success("✅ Données extraites !")
-        st.dataframe(df)
+uploaded_file = st.file_uploader("Déposez un PDF scanné (bon manuscrit)", type=["pdf"])
 
-        pdf_bytes = dataframe_to_pdf(df)
-        st.download_button("📥 Télécharger les résultats en PDF", data=pdf_bytes, file_name="bon_livraison_resultat.pdf", mime="application/pdf")
+if uploaded_file:
+    with st.spinner("🔍 Lecture OCR en cours..."):
+        result = ocr_space_file(uploaded_file, OCR_API_KEY)
+        try:
+            text = result['ParsedResults'][0]['ParsedText']
+            df = extract_data(text)
+            st.success("✅ Extraction terminée !")
+            st.dataframe(df)
+
+            pdf_bytes = dataframe_to_pdf(df)
+            st.download_button("📥 Télécharger les résultats en PDF", data=pdf_bytes, file_name="bon_livraison_resultat.pdf", mime="application/pdf")
+        except:
+            st.error("❌ Une erreur est survenue lors de la lecture OCR.")
