@@ -58,7 +58,7 @@ def dataframe_to_pdf(df):
         line = f"{row['Nombre de colis']} colis, {row['Pièces par colis']} pièces, Réf: {row['Référence']} {row['Commentaire']}"
         pdf.cell(200, 10, txt=line, ln=True)
     buffer = BytesIO()
-    pdf.output(buffer)
+    pdf.output(buffer, 'S')  # 'S' = output as string
     return buffer.getvalue()
 
 uploaded_file = st.file_uploader("Déposez un PDF scanné (bon manuscrit)", type=["pdf", "jpeg", "jpg", "png"])
