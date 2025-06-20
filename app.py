@@ -3,26 +3,21 @@ import pandas as pd
 import requests
 import io
 import re
-st.write("🔑 Valeur de OCR_SPACE_API_KEY :", repr(st.secrets.get("OCR_SPACE_API_KEY")))
 
 st.set_page_config(page_title="Fiche de réception", layout="wide")
 st.title("📥 Documents de réception → FICHE DE RECEPTION")
 
 # -----------------------------------------------------------------------------
-# Fonction OCR avec détection MIME pour OCR.space
+# 1) OCR.space avec détection de type MIME
 # -----------------------------------------------------------------------------
 def ocr_space_file(uploaded_file) -> str:
-    """Appelle OCR.space en précisant le bon type MIME selon l'extension."""
-    api_key = st.secrets.get("K82803521888957", "")
+    api_key = st.secrets.get("OCR_SPACE_API_KEY", "")
     if not api_key:
-        st.error("🛑 Clé OCR_SPACE_API_KEY introuvable dans secrets.toml")
+        st.error("🛑 Clé OCR_SPACE_API_KEY introuvable dans les Secrets Streamlit")
         return ""
-
-    # Lecture des octets et détection de l'extension
-    file_bytes = uploaded_file.read()
-    ext = uploaded_file.name.split(".")[-1].lower()
-
-    # Choix du MIME
+    # lecture et détection extension
+    data = uploaded_file.read()
+    ext = uploaded_file.name.lower().split(".")[-1]
     if ext == "pdf":
         mime = "application/pdf"
     elif ext in ("jpg", "jpeg"):
@@ -30,16 +25,10 @@ def ocr_space_file(uploaded_file) -> str:
     elif ext == "png":
         mime = "image/png"
     else:
-        st.error(f"🛑 Type de fichier non supporté: .{ext}")
+        st.error(f"🛑 Format non supporté : .{ext}")
         return ""
-
-    files = {"file": (uploaded_file.name, file_bytes, mime)}
-    payload = {
-        "apikey": api_key,
-        "language": "fre",
-        "isOverlayRequired": False
-    }
-
+    files = {"file": (uploaded_file.name, data, mime)}
+    payload = {"apikey": api_key, "language": "fre", "isOverlayRequired": False}
     resp = requests.post(
         "https://api.ocr.space/parse/image",
         files=files,
@@ -47,31 +36,26 @@ def ocr_space_file(uploaded_file) -> str:
         timeout=60
     )
     if resp.status_code != 200:
-        st.error(f"🛑 Erreur HTTP {resp.status_code} OCR.space")
+        st.error(f"🛑 Erreur HTTP {resp.status_code} depuis OCR.space")
         st.text(resp.text)
         return ""
-
     result = resp.json()
     if result.get("IsErroredOnProcessing"):
         msg = result.get("ErrorMessage", ["Erreur inconnue"])[0]
-        st.error(f"🛑 OCR.space a retourné une erreur: {msg}")
+        st.error(f"🛑 OCR.space a retourné une erreur : {msg}")
         return ""
-
-    # Concatène tous les blocs de texte extraits
+    # Concatène tout le texte détecté
     return "\n".join(p["ParsedText"] for p in result.get("ParsedResults", []))
 
+
 # -----------------------------------------------------------------------------
-# Parsing du texte OCR en DataFrame
+# 2) Parser le texte brut en DataFrame standardisée
 # -----------------------------------------------------------------------------
 def parse_text_to_df(raw: str) -> pd.DataFrame:
-    """
-    Transforme le texte OCR en DataFrame avec colonnes :
-    EAN, Désignation produits, Nb de colis, pcs par colis, total, Vérification
-    """
     rows = []
     for line in raw.splitlines():
         line = line.strip()
-        # On cherche une ligne : EAN (8–13 chiffres), nom, nb_colis, pcs_colis
+        # On s'attend à : EAN (8–13 chiffres) + libellé + nb_colis + pcs_colis
         m = re.match(r"^(\d{8,13})\s+(.+?)\s+(\d+)\s+(\d+)$", line)
         if m:
             ean, name, colis, pcs = m.groups()
@@ -86,17 +70,15 @@ def parse_text_to_df(raw: str) -> pd.DataFrame:
                 "Vérification": ""
             })
     if not rows:
-        st.warning("⚠️ Aucune ligne valide détectée dans le texte OCR.")
+        st.warning("⚠️ Aucune ligne valide détectée via OCR.")
     return pd.DataFrame(rows)
 
+
 # -----------------------------------------------------------------------------
-# Lecture et conversion Excel d'entrée
+# 3) Lecture des Excel d'entrée
 # -----------------------------------------------------------------------------
-def read_excel_to_df(buf: io.BytesIO) -> pd.DataFrame:
-    """Lit un Excel existant et le reformate/re-nomme ses colonnes si besoin."""
-    df = pd.read_excel(buf)
-    # On suppose qu'il contient déjà les 4 colonnes dans l'ordre :
-    # EAN, Désignation, Nb de colis, pcs par colis
+def read_excel_to_df(buffer: io.BytesIO) -> pd.DataFrame:
+    df = pd.read_excel(buffer)
     df = df.rename(columns={
         df.columns[0]: "EAN",
         df.columns[1]: "Désignation produits",
@@ -111,16 +93,17 @@ def read_excel_to_df(buf: io.BytesIO) -> pd.DataFrame:
         "total", "Vérification"
     ]]
 
+
 # -----------------------------------------------------------------------------
-# Upload et traitement
+# 4) Upload et traitement
 # -----------------------------------------------------------------------------
 uploaded = st.file_uploader(
-    "📂 Déposez un PDF, image (JPG/PNG) ou un fichier Excel",
+    "📂 Déposez un PDF, une image (JPG/PNG) ou un fichier Excel",
     type=["pdf", "jpg", "jpeg", "png", "xlsx"]
 )
 
 if uploaded:
-    ext = uploaded.name.split(".")[-1].lower()
+    ext = uploaded.name.lower().split(".")[-1]
     if ext == "xlsx":
         df = read_excel_to_df(io.BytesIO(uploaded.read()))
     else:
@@ -137,14 +120,14 @@ if uploaded:
     st.success("✅ Données extraites")
     st.dataframe(df, use_container_width=True)
 
-    # Préparation du fichier Excel à télécharger
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+    # Génère le fichier Excel de sortie
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="FICHE DE RECEPTION")
-    buffer.seek(0)
+    output.seek(0)
     st.download_button(
         label="📥 Télécharger la FICHE DE RECEPTION",
-        data=buffer,
+        data=output,
         file_name="fiche_de_reception.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
