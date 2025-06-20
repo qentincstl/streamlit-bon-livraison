@@ -4,6 +4,39 @@ import requests, io, re
 import fitz              # PyMuPDF
 from PIL import Image
 import base64
+# TEST API RAPIDE
+if st.button("🛠️ Tester Google Vision API"):
+    from PIL import ImageDraw, ImageFont
+    # 1) Création d'une image 200×60 blanche avec "HELLO"
+    img = Image.new("RGB", (200, 60), color="white")
+    draw = ImageDraw.Draw(img)
+    # Note : malgré l’absence de font spécifique, le texte sera basique
+    draw.text((10, 10), "HELLO", fill="black")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    img_bytes = buf.getvalue()
+
+    # 2) Appel API
+    r = requests.post(
+        VISION_URL,
+        json={"requests":[{
+            "image": {"content": base64.b64encode(img_bytes).decode()},
+            "features": [{"type": "DOCUMENT_TEXT_DETECTION"}]
+        }]},
+        timeout=60
+    )
+
+    # 3) Affichage diagnostic
+    st.write("• HTTP status code :", r.status_code)
+    try:
+        resp = r.json()
+        st.json(resp)
+        detected = resp.get("responses",[{}])[0].get("fullTextAnnotation",{}).get("text","<rien>")
+        st.success(f"OCR a détecté : {repr(detected)}")
+    except Exception as e:
+        st.error("❌ Impossible de parser la réponse JSON : " + str(e))
+    st.stop()
+  
 
 # --- Page config & style ---
 st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
