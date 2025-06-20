@@ -9,25 +9,33 @@ st.set_page_config(page_title="Fiche de réception", layout="wide")
 st.title("📥 Documents de réception → FICHE DE RECEPTION")
 
 # OCR.space API (gratuit jusqu'à 25 000 car./j)
-OCR_API_KEY = st.secrets.get("K82803521888957", "")
+OCR_API_KEY = st.secrets.get("K82803521888957")
 
 def ocr_space_file(file_bytes: bytes) -> str:
-    """Appel à OCR.space pour extraire tout le texte d'un PDF/image."""
-    payload = {
-        "apikey": OCR_API_KEY,
-        "language": "fre",
-        "isOverlayRequired": False
-    }
-    files = {"file": file_bytes}
-    r = requests.post("https://api.ocr.space/parse/image",
-                      files=files, data=payload)
-    r.raise_for_status()
-    result = r.json()
-    if result.get("IsErroredOnProcessing"):
-        st.error("Erreur OCR : " + result.get("ErrorMessage", ["?"])[0])
+    api_key = st.secrets.get("OCR_SPACE_API_KEY", "")
+    if not api_key:
+        st.error("🛑 Clé OCR_SPACE_API_KEY introuvable dans secrets.toml")
         return ""
-    texts = [p["ParsedText"] for p in result.get("ParsedResults", [])]
-    return "\n".join(texts)
+    payload = {
+        "apikey": api_key,
+        "language": "fre",
+        "isOverlayRequired": False,
+    }
+    files = {"file": ("upload", file_bytes)}
+    resp = requests.post("https://api.ocr.space/parse/image",
+                         files=files, data=payload, timeout=60)
+    # Ne pas lever automatiquement, mais inspecter
+    if resp.status_code != 200:
+        st.error(f"🛑 Erreur HTTP {resp.status_code} lors de l’appel OCR.space")
+        st.text(resp.text)
+        return ""
+    result = resp.json()
+    if result.get("IsErroredOnProcessing"):
+        msg = result.get("ErrorMessage", ["Erreur inconnue"])[0]
+        st.error(f"🛑 OCR.space a retourné une erreur: {msg}")
+        return ""
+    # Concatène tous les textes extraits
+    return "\n".join(p["ParsedText"] for p in result.get("ParsedResults", []))
 
 def parse_text_to_df(raw: str) -> pd.DataFrame:
     """
