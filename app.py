@@ -4,42 +4,34 @@ import requests, io, re
 import fitz              # PyMuPDF
 import base64
 
-# --- Configuration de la page et style ---
+# --- Page config + style ---
 st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
 st.markdown("""
 <style>
   .card { background:white; padding:1.5rem; border-radius:0.5rem;
-          box-shadow:0 4px 6px rgba(0,0,0,0.1); margin-bottom:2rem; }
-  .section-title { font-size:1.6rem; color:#4A90E2; margin-bottom:0.5rem; }
+          box-shadow:0 4px 6px rgba(0,0,0,0.1); margin-bottom:2rem;}
+  .section-title { font-size:1.6rem; color:#4A90E2; margin-bottom:0.5rem;}
 </style>
 """, unsafe_allow_html=True)
-st.markdown('<div class="section-title">📥 Documents de réception → FICHE DE RÉCEPTION</div>',
-            unsafe_allow_html=True)
+st.markdown('<div class="section-title">📥 Documents de réception → FICHE DE RÉCEPTION</div>', unsafe_allow_html=True)
 
-# --- Clé Google Vision via Secrets UI ---
+# --- Clé Google Vision (via Secrets) ---
 GOOGLE_VISION_API_KEY = st.secrets.get("GOOGLE_VISION_API_KEY", "")
 if not GOOGLE_VISION_API_KEY:
-    st.error("🛑 Définis `GOOGLE_VISION_API_KEY` dans les Secrets de Streamlit Cloud.")
+    st.error("🛑 Définis `GOOGLE_VISION_API_KEY` dans les Secrets.")
     st.stop()
 VISION_URL = f"https://vision.googleapis.com/v1/images:annotate?key={GOOGLE_VISION_API_KEY}"
 
-# --- OCR Google Vision pour une image ---
+# --- OCR Google Vision sur image bytes ---
 def google_ocr_image(img_bytes: bytes) -> str:
     content = base64.b64encode(img_bytes).decode()
-    body = {
-      "requests":[
-        {
-          "image":{"content": content},
-          "features":[{"type":"DOCUMENT_TEXT_DETECTION"}]
-        }
-      ]
-    }
-    resp = requests.post(VISION_URL, json=body, timeout=60)
-    data = resp.json()
-    return "\n".join(r.get("fullTextAnnotation",{}).get("text","")
-                     for r in data.get("responses",[]))
+    body = {"requests":[{"image":{"content":content},
+                         "features":[{"type":"DOCUMENT_TEXT_DETECTION"}]}]}
+    r = requests.post(VISION_URL, json=body, timeout=60)
+    res = r.json().get("responses", [])
+    return "\n".join(r.get("fullTextAnnotation",{}).get("text","") for r in res)
 
-# --- Extraction texte PDF natif (si possible) ---
+# --- Extraction texte PDF natif ---
 def extract_pdf_text(pdf_bytes: bytes) -> str:
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -53,32 +45,27 @@ def google_ocr_pdf(pdf_bytes: bytes) -> str:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     except:
         return ""
-    full = ""
+    out = ""
     for page in doc:
         pix = page.get_pixmap(dpi=300)
         png = pix.tobytes("png")
-        full += google_ocr_image(png) + "\n"
-    return full
+        out += google_ocr_image(png) + "\n"
+    return out
 
-# --- Parsing variant keywords pour ref/colis/pcs ---
+# --- 1) Parsing par mots-clés (robust) ---
 def parse_robust(raw: str) -> pd.DataFrame:
-    refs   = re.findall(r"(?i)(?:ref(?:[ée]rence)?|réf)\s*[:\-]?\s*(\S+)", raw)
-    colis  = re.findall(r"(?i)(?:nombre\s*de\s*colis|nbr\s*colis|colis)\s*[:\-]?\s*(\d+)", raw)
-    pcs    = re.findall(r"(?i)(?:nombre\s*de\s*pi[eè]ces|pcs(?:\s*par\s*colis)?|pi[eè]ce?s?)\s*[:\-]?\s*(\d+)", raw)
+    refs  = re.findall(r"(?i)(?:ref(?:[ée]rence)?|réf)\s*[:\-]?\s*(\S+)", raw)
+    colis = re.findall(r"(?i)(?:nombre\s*de\s*colis|nbr\s*colis|colis)\s*[:\-]?\s*(\d+)", raw)
+    pcs   = re.findall(r"(?i)(?:nombre\s*de\s*pi[eè]ces|pcs(?:\s*par\s*colis)?|pi[eè]ce?s?)\s*[:\-]?\s*(\d+)", raw)
     n = min(len(refs), len(colis), len(pcs))
-    rows = []
-    for i in range(n):
-        c, p = int(colis[i]), int(pcs[i])
-        rows.append({
-            "Référence": refs[i],
-            "Nb de colis": c,
-            "pcs par colis": p,
-            "total": c * p,
-            "Vérification": ""
-        })
+    rows = [{"Référence": refs[i],
+             "Nb de colis": int(colis[i]),
+             "pcs par colis": int(pcs[i]),
+             "total": int(colis[i]) * int(pcs[i]),
+             "Vérification": ""} for i in range(n)]
     return pd.DataFrame(rows)
 
-# --- Parsing générique : 3 nombres sur une seule ligne ---
+# --- 2) Parsing générique (3 nombres sur la même ligne) ---
 def parse_generic(raw: str) -> pd.DataFrame:
     rows = []
     for line in raw.splitlines():
@@ -94,9 +81,9 @@ def parse_generic(raw: str) -> pd.DataFrame:
             })
     return pd.DataFrame(rows)
 
-# --- Parsing séquentiel : une valeur par ligne regroupée par 3 ---
+# --- 3) Parsing séquentiel (1 valeur/ligne regroupée par 3) ---
 def parse_sequential(raw: str) -> pd.DataFrame:
-    # On filtre hors entêtes
+    # on retire les entêtes connues
     lines = [l.strip() for l in raw.splitlines()
              if l.strip() and not re.match(
                  r"(?i)^(date|nom du client|référence|nombre de colis|nombre de pièces)", l)]
@@ -105,32 +92,30 @@ def parse_sequential(raw: str) -> pd.DataFrame:
         chunk = lines[i:i+3]
         if len(chunk) == 3:
             ref, colis, pcs = chunk
-            try:
+            if colis.isdigit() and pcs.isdigit():
                 c, p = int(colis), int(pcs)
                 rows.append({
                     "Référence": ref,
                     "Nb de colis": c,
                     "pcs par colis": p,
-                    "total": c * p,
+                    "total": c*p,
                     "Vérification": ""
                 })
-            except:
-                continue
     return pd.DataFrame(rows)
 
-# --- Fallback orchestration ---
+# --- Orchestration des fallbacks ---
 def parse_with_fallback(raw: str) -> pd.DataFrame:
     df = parse_robust(raw)
     if not df.empty:
         return df
-    st.warning("⚠️ Pas de mots-clés, fallback générique.")
+    st.warning("⚠️ Pas de mots-clés, fallback générique…")
     df = parse_generic(raw)
     if not df.empty:
         return df
-    st.warning("⚠️ Fallback générique vide, fallback séquentiel.")
+    st.warning("⚠️ Générique vide, fallback séquentiel…")
     df = parse_sequential(raw)
     if df.empty:
-        st.warning("⚠️ Même le séquentiel n’a rien détecté.")
+        st.warning("⚠️ Même le séquentiel n’a rien trouvé.")
     return df
 
 # --- Lecture Excel structuré ---
@@ -144,22 +129,17 @@ def read_excel_bytes(x: bytes) -> pd.DataFrame:
         })
         df["total"] = df["Nb de colis"] * df["pcs par colis"]
         df["Vérification"] = ""
-        return df[[
-            "Référence","Nb de colis","pcs par colis","total","Vérification"
-        ]]
+        return df[["Référence","Nb de colis","pcs par colis","total","Vérification"]]
     except Exception as e:
         st.error(f"❌ Erreur lecture Excel : {e}")
         return pd.DataFrame(columns=[
             "Référence","Nb de colis","pcs par colis","total","Vérification"
         ])
 
-# --- 1️⃣ Import du document ---
+# --- 1️⃣ Import ---
 with st.container():
-    st.markdown('<div class="card"><div class="section-title">1️⃣ Import</div>', unsafe_allow_html=True)
-    uploaded = st.file_uploader(
-        "PDF / Image (JPG/PNG) / Excel (.xlsx)",
-        type=["pdf","jpg","jpeg","png","xlsx"]
-    )
+    st.markdown('<div class="card"><div class="section-title">1️⃣ Import du document</div>', unsafe_allow_html=True)
+    uploaded = st.file_uploader("PDF / Image / Excel", type=["pdf","jpg","jpeg","png","xlsx"])
     st.markdown('</div>', unsafe_allow_html=True)
 
 if uploaded:
@@ -173,11 +153,13 @@ if uploaded:
         if ext == "xlsx":
             raw = None
         else:
-            raw = extract_pdf_text(data) if ext == "pdf" else ""
+            raw = extract_pdf_text(data) if ext=="pdf" else ""
             if not raw.strip():
-                raw = google_ocr_pdf(data) if ext == "pdf" else google_ocr_image(data)
+                raw = google_ocr_pdf(data) if ext=="pdf" else google_ocr_image(data)
+
         st.subheader("📄 Texte brut extrait")
         st.text_area("", raw or "(vide)", height=200)
+
         df = read_excel_bytes(data) if ext=="xlsx" else parse_with_fallback(raw or "")
         st.markdown('</div>', unsafe_allow_html=True)
 
