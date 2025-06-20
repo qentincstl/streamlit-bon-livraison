@@ -4,6 +4,15 @@ import requests, io, re
 import fitz              # PyMuPDF
 from PIL import Image
 
+
+[theme]
+primaryColor = "#4A90E2"             # bleu doux pour les accents
+backgroundColor = "#FFFFFF"          # fond blanc pur
+secondaryBackgroundColor = "#F6F8FA" # léger gris pour les conteneurs
+textColor = "#111517"                # texte sombre
+font = "sans serif"
+
+
 # --- Config de la page ---
 st.set_page_config(
     page_title="Fiche de réception",
