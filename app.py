@@ -39,13 +39,13 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# --- Clé OCR.space (via Secrets UI) ---
+# --- Clé OCR.space ---
 OCR_KEY = st.secrets.get("OCR_SPACE_API_KEY", "")
 if not OCR_KEY:
-    st.error("🛑 Veuillez définir `OCR_SPACE_API_KEY` dans les Secrets de Streamlit Cloud.")
+    st.error("🛑 Définis `OCR_SPACE_API_KEY` dans les Secrets Streamlit Cloud.")
     st.stop()
 
-# --- Extraction de texte si PDF « numérique » ---
+# --- Extraction de texte si PDF “numérique” ---
 def extract_pdf_text(pdf_bytes: bytes) -> str:
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -82,11 +82,10 @@ def ocr_pdf_bytes(pdf_bytes: bytes) -> str:
 # --- Parsing robuste des données ― références, colis, pièces ---
 def parse_robust(raw: str) -> pd.DataFrame:
     """
-    Reconnaît : 
-      – toutes variantes de ref / référence 
+    Reconnaît variantes de :
+      – ref / référence / réf
       – nbr colis / nombre de colis / colis
       – pcs / pièces / nombre de pièces
-    et aligne les triplets en tableau.
     """
     refs   = re.findall(r"(?i)(?:ref(?:[ée]rence)?|réf)\s*[:\-]?\s*(\S+)", raw)
     colis  = re.findall(r"(?i)(?:nombre\s*de\s*colis|nbr\s*colis|colis)\s*[:\-]?\s*(\d+)", raw)
@@ -106,9 +105,32 @@ def parse_robust(raw: str) -> pd.DataFrame:
             "total": c * p,
             "Vérification": ""
         })
-    if not rows:
-        st.warning("⚠️ Aucune donnée détectée avec les mots-clés attendus.")
     return pd.DataFrame(rows)
+
+# --- Stratégie de secours : parsing générique si parse_robust échoue ---
+def parse_generic(raw: str) -> pd.DataFrame:
+    rows = []
+    for line in raw.splitlines():
+        nums = re.findall(r"\d+", line)
+        if len(nums) >= 3:
+            ref, colis, pcs = nums[0], nums[1], nums[2]
+            rows.append({
+                "Référence": ref,
+                "Nb de colis": int(colis),
+                "pcs par colis": int(pcs),
+                "total": int(colis) * int(pcs),
+                "Vérification": ""
+            })
+    return pd.DataFrame(rows)
+
+def parse_with_fallback(raw: str) -> pd.DataFrame:
+    df = parse_robust(raw)
+    if df.empty:
+        st.warning("⚠️ Aucun mot-clé trouvé, utilisation du parsing générique.")
+        df = parse_generic(raw)
+        if df.empty:
+            st.warning("⚠️ Le parsing générique n’a rien trouvé non plus.")
+    return df
 
 # --- Lecture d’un Excel déjà structuré ---
 def read_excel_bytes(xl_bytes: bytes) -> pd.DataFrame:
@@ -150,13 +172,14 @@ if uploaded:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown('<div class="section-title">2️⃣ Extraction du texte</div>', unsafe_allow_html=True)
 
-        # PDF numérique ?
-        raw = extract_pdf_text(data) if ext == "pdf" else ""
-        # sinon OCR (PDF scanné ou image)
-        if not raw.strip():
-            raw = ocr_pdf_bytes(data) if ext == "pdf" else ocr_image_bytes(data)
-
-        # Affichage du texte brut
+        raw = ""
+        if ext == "pdf":
+            raw = extract_pdf_text(data)
+            if not raw.strip():
+                raw = ocr_pdf_bytes(data)
+        elif ext in ("jpg","jpeg","png"):
+            raw = ocr_image_bytes(data)
+        # Excel on skip raw
         st.subheader("📄 Texte brut extrait")
         st.text_area("", raw or "(vide)", height=200)
 
@@ -164,7 +187,7 @@ if uploaded:
         if ext == "xlsx":
             df = read_excel_bytes(data)
         else:
-            df = parse_robust(raw or "")
+            df = parse_with_fallback(raw or "")
 
         st.markdown('</div>', unsafe_allow_html=True)
 
