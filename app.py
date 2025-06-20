@@ -3,19 +3,34 @@ import pandas as pd
 import requests
 import io
 import re
+import fitz  # PyMuPDF
 
 st.set_page_config(page_title="Fiche de réception", layout="wide")
 st.title("📥 Documents de réception → FICHE DE RECEPTION")
 
 # -----------------------------------------------------------------------------
-# 1) OCR.space avec détection de type MIME
+# 1) Extraction texte PDF numérique
+# -----------------------------------------------------------------------------
+def extract_pdf_text(uploaded_file) -> str:
+    """Tente d'extraire le texte d'un PDF textuel (non scanné)."""
+    try:
+        data = uploaded_file.read()
+        doc = fitz.open(stream=data, filetype="pdf")
+        return "".join(page.get_text() for page in doc)
+    except Exception:
+        return ""
+
+# -----------------------------------------------------------------------------
+# 2) OCR.space avec détection de type MIME
 # -----------------------------------------------------------------------------
 def ocr_space_file(uploaded_file) -> str:
+    """Appelle OCR.space en précisant le bon MIME selon l'extension."""
     api_key = st.secrets.get("OCR_SPACE_API_KEY", "")
     if not api_key:
         st.error("🛑 Clé OCR_SPACE_API_KEY introuvable dans les Secrets Streamlit")
         return ""
-    # lecture et détection extension
+    # lecture + détection extension
+    uploaded_file.seek(0)
     data = uploaded_file.read()
     ext = uploaded_file.name.lower().split(".")[-1]
     if ext == "pdf":
@@ -29,6 +44,7 @@ def ocr_space_file(uploaded_file) -> str:
         return ""
     files = {"file": (uploaded_file.name, data, mime)}
     payload = {"apikey": api_key, "language": "fre", "isOverlayRequired": False}
+
     resp = requests.post(
         "https://api.ocr.space/parse/image",
         files=files,
@@ -44,40 +60,41 @@ def ocr_space_file(uploaded_file) -> str:
         msg = result.get("ErrorMessage", ["Erreur inconnue"])[0]
         st.error(f"🛑 OCR.space a retourné une erreur : {msg}")
         return ""
-    # Concatène tout le texte détecté
     return "\n".join(p["ParsedText"] for p in result.get("ParsedResults", []))
 
-
 # -----------------------------------------------------------------------------
-# 2) Parser le texte brut en DataFrame standardisée
+# 3) Parsing du texte brut en DataFrame
 # -----------------------------------------------------------------------------
 def parse_text_to_df(raw: str) -> pd.DataFrame:
+    """
+    Transforme le texte OCR ou PDF brut en DataFrame avec colonnes :
+    EAN, Désignation produits, Nb de colis, pcs par colis, total, Vérification
+    """
     rows = []
     for line in raw.splitlines():
         line = line.strip()
-        # On s'attend à : EAN (8–13 chiffres) + libellé + nb_colis + pcs_colis
-        m = re.match(r"^(\d{8,13})\s+(.+?)\s+(\d+)\s+(\d+)$", line)
+        # regex qui détecte : EAN (8–13 chiffres), nom, nb_colis, pcs_colis
+        m = re.search(r"(\d{8,13}).*?([A-Za-zÀ-ÖØ-öø-ÿ0-9 \-]+?)\s+(\d+)\s+(\d+)$", line)
         if m:
             ean, name, colis, pcs = m.groups()
-            colis_i = int(colis)
-            pcs_i = int(pcs)
+            colis_i, pcs_i = int(colis), int(pcs)
             rows.append({
                 "EAN": ean,
-                "Désignation produits": name,
+                "Désignation produits": name.strip(),
                 "Nb de colis": colis_i,
                 "pcs par colis": pcs_i,
                 "total": colis_i * pcs_i,
                 "Vérification": ""
             })
     if not rows:
-        st.warning("⚠️ Aucune ligne valide détectée via OCR.")
+        st.warning("⚠️ Aucune ligne valide détectée via OCR/PDF textuel.")
     return pd.DataFrame(rows)
 
-
 # -----------------------------------------------------------------------------
-# 3) Lecture des Excel d'entrée
+# 4) Lecture d'un Excel d'entrée
 # -----------------------------------------------------------------------------
 def read_excel_to_df(buffer: io.BytesIO) -> pd.DataFrame:
+    """Lit un Excel existant et le reformate/nomme ses colonnes."""
     df = pd.read_excel(buffer)
     df = df.rename(columns={
         df.columns[0]: "EAN",
@@ -93,9 +110,8 @@ def read_excel_to_df(buffer: io.BytesIO) -> pd.DataFrame:
         "total", "Vérification"
     ]]
 
-
 # -----------------------------------------------------------------------------
-# 4) Upload et traitement
+# 5) Upload & traitement global
 # -----------------------------------------------------------------------------
 uploaded = st.file_uploader(
     "📂 Déposez un PDF, une image (JPG/PNG) ou un fichier Excel",
@@ -104,11 +120,21 @@ uploaded = st.file_uploader(
 
 if uploaded:
     ext = uploaded.name.lower().split(".")[-1]
+    # si Excel
     if ext == "xlsx":
         df = read_excel_to_df(io.BytesIO(uploaded.read()))
     else:
-        raw_text = ocr_space_file(uploaded)
+        # PDF textuel d'abord
+        raw_text = ""
+        if ext == "pdf":
+            raw_text = extract_pdf_text(uploaded)
+        # sinon OCR cloud
+        if not raw_text:
+            raw_text = ocr_space_file(uploaded)
+        # affichage du texte brut pour debug
         if raw_text:
+            with st.expander("📄 Voir le texte brut (PDF/OCR)"):
+                st.text(raw_text)
             df = parse_text_to_df(raw_text)
         else:
             df = pd.DataFrame(columns=[
