@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import io
 import re
+st.write("🔑 Clés chargées :", list(st.secrets.keys()))
 
 st.set_page_config(page_title="Fiche de réception", layout="wide")
 st.title("📥 Documents de réception → FICHE DE RECEPTION")
