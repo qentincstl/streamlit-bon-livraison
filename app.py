@@ -101,40 +101,55 @@ def parse_with_fallback(raw: str) -> pd.DataFrame:
 
 # --- Découpage en 3 zones + OCR + fallback ---
 def ocr_by_columns_with_fallback(img: Image.Image) -> pd.DataFrame:
-    w,h=img.size
-    cuts=[0.3,0.6]
-    boxes=[(0,0,int(w*cuts[0]),h),
-           (int(w*cuts[0]),0,int(w*cuts[1]),h),
-           (int(w*cuts[1]),0,w,h)]
-    zone_texts=[]
-    counts=[]
-    for x1,y1,x2,y2 in boxes:
-        reg=img.crop((x1,y1,x2,y2))
-        buf=io.BytesIO(); reg.save(buf,format="PNG")
-        txt=google_ocr_image(buf.getvalue())
-        lines=[l.strip() for l in txt.splitlines() if l.strip()]
+    w,h = img.size
+    cuts = [0.3, 0.6]
+    boxes = [
+        (0,0,int(w*cuts[0]),h),
+        (int(w*cuts[0]),0,int(w*cuts[1]),h),
+        (int(w*cuts[1]),0,w,h)
+    ]
+    zone_texts = []
+    counts = []
+    for (x1,y1,x2,y2) in boxes:
+        reg = img.crop((x1,y1,x2,y2))
+        buf = io.BytesIO(); reg.save(buf, format="PNG")
+        txt = ocr_google(buf.getvalue())
+        lines = [l.strip() for l in txt.splitlines() if l.strip()]
         zone_texts.append(lines)
         counts.append(len(lines))
     st.write(f"📊 Lignes détectées par zone : Réf={counts[0]}, Colis={counts[1]}, Pièces={counts[2]}")
-    n=min(*counts)
-    if n>0:
-        rows=[]
+    n = min(*counts)
+    if n > 0:
+        rows = []
         for i in range(n):
-            ref=zone_texts[0][i]
-            c=int(zone_texts[1][i])
-            p=int(zone_texts[2][i])
-            rows.append({"Référence":ref,
-                         "Nb de colis":c,
-                         "pcs par colis":p,
-                         "total":c*p,"Vérification":""})
+            ref = zone_texts[0][i]
+            colis = re.findall(r"\d+", zone_texts[1][i])
+            pcs   = re.findall(r"\d+", zone_texts[2][i])
+            c = int(colis[0]) if colis else None
+            p = int(pcs[0])   if pcs   else None
+            total = c*p if c is not None and p is not None else None
+            rows.append({
+                "Référence": ref,
+                "Nb de colis": c,
+                "pcs par colis": p,
+                "total": total,
+                "Vérification": ""
+            })
         return pd.DataFrame(rows)
-    st.warning("⚠️ Aucune ligne alignée; fallback parsing complet.")
-    # fallback: OCR page entière + parsing
-    buf_full=io.BytesIO()
-    img.save(buf_full,format="PNG")
-    full_txt=google_ocr_image(buf_full.getvalue())
-    st.markdown(f"<div class='debug'>{full_txt or '(vide)'}</div>", unsafe_allow_html=True)
-    return parse_with_fallback(full_txt)
+
+    # --- Fallback parsing complet ---
+    st.warning("⚠️ Aucune ligne alignée ; fallback parsing complet.")
+    # OCR de la page entière
+    buf_full = io.BytesIO()
+    img.save(buf_full, format="PNG")
+    full_txt = ocr_google(buf_full.getvalue())
+    # Affiche le texte brut complet pour debug
+    st.subheader("🔍 Texte brut complet (OCR entier)")
+    st.text_area("", full_txt or "(vide)", height=300)
+    # Puis on tente le parsing sur ce texte
+    df = parse_with_fallback(full_txt)
+    return df
+    
 
 # --- Interface ---
 with st.container():
