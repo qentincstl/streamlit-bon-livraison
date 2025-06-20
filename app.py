@@ -1,159 +1,124 @@
+# app.py
 import streamlit as st
 import pandas as pd
-import requests
-import io
-import re
+import requests, io, re
 import fitz  # PyMuPDF
 
 st.set_page_config(page_title="Fiche de réception", layout="wide")
-st.title("📥 Documents de réception → FICHE DE RECEPTION")
+st.title("📥 Documents de réception → FICHE DE RÉCEPTION")
 
-# -----------------------------------------------------------------------------
 # 1) Extraction texte PDF numérique
-# -----------------------------------------------------------------------------
 def extract_pdf_text(uploaded_file) -> str:
-    """Tente d'extraire le texte d'un PDF textuel (non scanné)."""
     try:
+        uploaded_file.seek(0)
         data = uploaded_file.read()
         doc = fitz.open(stream=data, filetype="pdf")
-        return "".join(page.get_text() for page in doc)
-    except Exception:
+        return "\n".join(page.get_text() for page in doc)
+    except:
         return ""
 
-# -----------------------------------------------------------------------------
-# 2) OCR.space avec détection de type MIME
-# -----------------------------------------------------------------------------
+# 2) OCR.space avec MIME correct
 def ocr_space_file(uploaded_file) -> str:
-    """Appelle OCR.space en précisant le bon MIME selon l'extension."""
     api_key = st.secrets.get("OCR_SPACE_API_KEY", "")
     if not api_key:
-        st.error("🛑 Clé OCR_SPACE_API_KEY introuvable dans les Secrets Streamlit")
+        st.error("🛑 Clé OCR_SPACE_API_KEY manquante dans les Secrets")
         return ""
-    # lecture + détection extension
     uploaded_file.seek(0)
     data = uploaded_file.read()
     ext = uploaded_file.name.lower().split(".")[-1]
     if ext == "pdf":
         mime = "application/pdf"
-    elif ext in ("jpg", "jpeg"):
+    elif ext in ("jpg","jpeg"):
         mime = "image/jpeg"
     elif ext == "png":
         mime = "image/png"
     else:
-        st.error(f"🛑 Format non supporté : .{ext}")
+        st.error(f"🛑 Format non supporté: .{ext}")
         return ""
     files = {"file": (uploaded_file.name, data, mime)}
     payload = {"apikey": api_key, "language": "fre", "isOverlayRequired": False}
-
-    resp = requests.post(
-        "https://api.ocr.space/parse/image",
-        files=files,
-        data=payload,
-        timeout=60
-    )
-    if resp.status_code != 200:
-        st.error(f"🛑 Erreur HTTP {resp.status_code} depuis OCR.space")
+    resp = requests.post("https://api.ocr.space/parse/image",
+                         files=files, data=payload, timeout=60)
+    if resp.status_code!=200:
+        st.error(f"🛑 Erreur HTTP {resp.status_code} OCR.space")
         st.text(resp.text)
         return ""
-    result = resp.json()
-    if result.get("IsErroredOnProcessing"):
-        msg = result.get("ErrorMessage", ["Erreur inconnue"])[0]
-        st.error(f"🛑 OCR.space a retourné une erreur : {msg}")
+    j = resp.json()
+    if j.get("IsErroredOnProcessing"):
+        st.error("🛑 OCR.space:", j["ErrorMessage"][0])
         return ""
-    return "\n".join(p["ParsedText"] for p in result.get("ParsedResults", []))
+    return "\n".join(p["ParsedText"] for p in j.get("ParsedResults",[]))
 
-# -----------------------------------------------------------------------------
-# 3) Parsing du texte brut en DataFrame
-# -----------------------------------------------------------------------------
+# 3) Parsing très souple : cherche au moins 3 nombres dans une ligne
 def parse_text_to_df(raw: str) -> pd.DataFrame:
-    """
-    Transforme le texte OCR ou PDF brut en DataFrame avec colonnes :
-    EAN, Désignation produits, Nb de colis, pcs par colis, total, Vérification
-    """
     rows = []
     for line in raw.splitlines():
-        line = line.strip()
-        # regex qui détecte : EAN (8–13 chiffres), nom, nb_colis, pcs_colis
-        m = re.search(r"(\d{8,13}).*?([A-Za-zÀ-ÖØ-öø-ÿ0-9 \-]+?)\s+(\d+)\s+(\d+)$", line)
-        if m:
-            ean, name, colis, pcs = m.groups()
-            colis_i, pcs_i = int(colis), int(pcs)
+        # on capture tous les chiffres de la ligne
+        nums = re.findall(r"\d+", line)
+        if len(nums) >= 3:
+            # on prend les 3 premiers comme Réf / Nb colis / pcs colis
+            ref, colis, pcs = nums[0], nums[1], nums[2]
             rows.append({
-                "EAN": ean,
-                "Désignation produits": name.strip(),
-                "Nb de colis": colis_i,
-                "pcs par colis": pcs_i,
-                "total": colis_i * pcs_i,
+                "Référence": ref,
+                "Nb de colis": int(colis),
+                "pcs par colis": int(pcs),
+                "total": int(colis)*int(pcs),
                 "Vérification": ""
             })
     if not rows:
-        st.warning("⚠️ Aucune ligne valide détectée via OCR/PDF textuel.")
+        st.warning("⚠️ Aucune ligne valide détectée.")
     return pd.DataFrame(rows)
 
-# -----------------------------------------------------------------------------
-# 4) Lecture d'un Excel d'entrée
-# -----------------------------------------------------------------------------
-def read_excel_to_df(buffer: io.BytesIO) -> pd.DataFrame:
-    """Lit un Excel existant et le reformate/nomme ses colonnes."""
-    df = pd.read_excel(buffer)
+# 4) Lecture Excel d'entrée
+def read_excel_to_df(buf: io.BytesIO) -> pd.DataFrame:
+    df = pd.read_excel(buf)
     df = df.rename(columns={
-        df.columns[0]: "EAN",
-        df.columns[1]: "Désignation produits",
-        df.columns[2]: "Nb de colis",
-        df.columns[3]: "pcs par colis"
+        df.columns[0]:"Référence",
+        df.columns[1]:"Nb de colis",
+        df.columns[2]:"pcs par colis"
     })
     df["total"] = df["Nb de colis"] * df["pcs par colis"]
     df["Vérification"] = ""
-    return df[[
-        "EAN", "Désignation produits",
-        "Nb de colis", "pcs par colis",
-        "total", "Vérification"
-    ]]
+    return df[["Référence","Nb de colis","pcs par colis","total","Vérification"]]
 
-# -----------------------------------------------------------------------------
-# 5) Upload & traitement global
-# -----------------------------------------------------------------------------
+# --- Interface ---
 uploaded = st.file_uploader(
-    "📂 Déposez un PDF, une image (JPG/PNG) ou un fichier Excel",
-    type=["pdf", "jpg", "jpeg", "png", "xlsx"]
+    "📂 Déposez un PDF, JPG/PNG ou fichier Excel (.xlsx)",
+    type=["pdf","jpg","jpeg","png","xlsx"]
 )
 
 if uploaded:
     ext = uploaded.name.lower().split(".")[-1]
-    # si Excel
+    # 4. si Excel
     if ext == "xlsx":
         df = read_excel_to_df(io.BytesIO(uploaded.read()))
     else:
-        # PDF textuel d'abord
-        raw_text = ""
-        if ext == "pdf":
-            raw_text = extract_pdf_text(uploaded)
-        # sinon OCR cloud
-        if not raw_text:
-            raw_text = ocr_space_file(uploaded)
-        # affichage du texte brut pour debug
-        if raw_text:
-            with st.expander("📄 Voir le texte brut (PDF/OCR)"):
-                st.text(raw_text)
-            df = parse_text_to_df(raw_text)
+        # 1. PDF textuel d'abord
+        raw = ""
+        if ext=="pdf":
+            raw = extract_pdf_text(uploaded)
+        # 2. sinon OCR
+        if not raw.strip():
+            raw = ocr_space_file(uploaded)
+        # Affiche le brut pour debug
+        if raw:
+            with st.expander("📄 Texte brut (PDF ou OCR)"):
+                st.text(raw)
+            df = parse_text_to_df(raw)
         else:
-            df = pd.DataFrame(columns=[
-                "EAN", "Désignation produits",
-                "Nb de colis", "pcs par colis",
-                "total", "Vérification"
-            ])
+            df = pd.DataFrame(columns=["Référence","Nb de colis","pcs par colis","total","Vérification"])
 
     st.success("✅ Données extraites")
     st.dataframe(df, use_container_width=True)
 
-    # Génère le fichier Excel de sortie
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="FICHE DE RECEPTION")
-    output.seek(0)
+    # 5. Export Excel
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as w:
+        df.to_excel(w, index=False, sheet_name="FICHE_RECEPTION")
+    out.seek(0)
     st.download_button(
-        label="📥 Télécharger la FICHE DE RECEPTION",
-        data=output,
+        "📥 Télécharger la FICHE DE RECEPTION",
+        data=out,
         file_name="fiche_de_reception.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
