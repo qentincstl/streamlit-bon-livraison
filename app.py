@@ -23,45 +23,57 @@ def extract_pdf_text(uploaded_file) -> str:
 
 # 2) OCR.space avec MIME correct
 def ocr_space_file(uploaded_file) -> str:
-    st.info("🔍 [DEBUG] ocr_space_file() appelé")
     api_key = st.secrets.get("OCR_SPACE_API_KEY", "")
-    st.write(f"[DEBUG] Clé OCR_SPACE_API_KEY présente: {bool(api_key)}")
     if not api_key:
-        st.error("🛑 Clé OCR_SPACE_API_KEY manquante")
+        st.error("🛑 Clé OCR_SPACE_API_KEY manquante dans les Secrets")
         return ""
+
     uploaded_file.seek(0)
     data = uploaded_file.read()
-    st.write(f"[DEBUG] Taille des bytes pour OCR.space : {len(data)}")
     ext = uploaded_file.name.lower().split(".")[-1]
-    st.write(f"[DEBUG] Extension détectée pour OCR.space : .{ext}")
-    if ext == "pdf":
-        mime = "application/pdf"
-    elif ext in ("jpg","jpeg"):
-        mime = "image/jpeg"
-    elif ext == "png":
-        mime = "image/png"
-    else:
-        st.error(f"🛑 Format non supporté: .{ext}")
+    mime = {
+        "pdf": "application/pdf",
+        "jpg": "image/jpeg", "jpeg": "image/jpeg",
+        "png": "image/png"
+    }.get(ext)
+    if not mime:
+        st.error(f"🛑 Format non supporté : .{ext}")
         return ""
-    files = {"file": (uploaded_file.name, data, mime)}
-    payload = {"apikey": api_key, "language": "fre", "isOverlayRequired": False}
-    resp = requests.post("https://api.ocr.space/parse/image",
-                         files=files, data=payload, timeout=60)
-    st.write(f"[DEBUG] OCR.space status_code: {resp.status_code}")
-    if resp.status_code != 200:
-        st.error(f"🛑 HTTP {resp.status_code} / OCR.space")
-        st.text(resp.text)
-        return ""
-    j = resp.json()
-    st.write(f"[DEBUG] OCR.space JSON keys: {list(j.keys())}")
-    if j.get("IsErroredOnProcessing"):
-        st.error(f"🛑 OCR.space a retourné une erreur: {j.get('ErrorMessage')}")
-        return ""
-    texts = [p["ParsedText"] for p in j.get("ParsedResults", [])]
-    full = "\n".join(texts)
-    st.write(f"[DEBUG] Longueur du texte OCR.space : {len(full)}")
-    return full
 
+    # appel OCR.space
+    resp = requests.post(
+        "https://api.ocr.space/parse/image",
+        files={"file": (uploaded_file.name, data, mime)},
+        data={"apikey": api_key, "language": "fre", "isOverlayRequired": False},
+        timeout=60
+    )
+
+    # --- NOUVEAU DEBUG : afficher la réponse brute ---
+    st.write("📋 [DEBUG] OCR.space raw response:", resp.text)
+
+    # vérification du HTTP
+    if resp.status_code != 200:
+        st.error(f"🛑 HTTP {resp.status_code} depuis OCR.space")
+        return ""
+
+    # parse JSON et debug
+    try:
+        j = resp.json()
+    except Exception as e:
+        st.error(f"🛑 Impossible de parser le JSON OCR.space : {e}")
+        return ""
+    st.write("🔑 [DEBUG] OCR.space JSON keys:", list(j.keys()))
+    st.write("✳️ [DEBUG] ParsedResults:", j.get("ParsedResults"))
+
+    if j.get("IsErroredOnProcessing"):
+        st.error("🛑 OCR.space a retourné une erreur: " + str(j.get("ErrorMessage")))
+        return ""
+
+    # concatène tout le texte (même s'il est vide)
+    texts = [p.get("ParsedText","") for p in j.get("ParsedResults",[])]
+    full = "\n".join(texts)
+    st.write(f"✏️ [DEBUG] Texte OCR.length = {len(full)} caractères")
+    return full
 # 3) Parsing très souple
 def parse_text_to_df(raw: str) -> pd.DataFrame:
     st.info("🔍 [DEBUG] parse_text_to_df() appelé")
