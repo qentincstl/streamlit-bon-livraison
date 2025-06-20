@@ -1,39 +1,57 @@
-def ocr_space_file(uploaded_file) -> str:
-    st.info("🔍 [DEBUG] ocr_space_file() appelé")
+# app.py
+import streamlit as st
+import requests, io, re
+import fitz  # PyMuPDF
+import pandas as pd
+
+st.set_page_config(page_title="DEBUG 2", layout="wide")
+st.write("✅ **App démarrée**")  # Vérif que le script est chargé
+
+uploaded = st.file_uploader("📂 Déposez un PDF/PNG/JPG ou .xlsx", type=["pdf","jpg","jpeg","png","xlsx"])
+st.write("📄 file_uploader retourné :", uploaded)
+
+if uploaded is not None:
+    st.write("✅ Fichier détecté :", uploaded.name)
+
+    ext = uploaded.name.lower().split(".")[-1]
+    st.write("🔍 Extension :", ext)
+
+    # Test PDF textuel
+    if ext == "pdf":
+        try:
+            st.write("📘 Tentative extract_pdf_text…")
+            uploaded.seek(0)
+            data = uploaded.read()
+            doc = fitz.open(stream=data, filetype="pdf")
+            txt = "\n".join(page.get_text() for page in doc)
+            st.write(f"📘 Texte PDF brut ({len(txt)} chars):")
+            st.text(txt[:500])
+        except Exception as e:
+            st.error("❌ extract_pdf_text erreur: " + str(e))
+
+    # Test OCR.space brut
+    st.write("📙 Tentative OCR.space…")
     api_key = st.secrets.get("OCR_SPACE_API_KEY", "")
-    st.write(f"[DEBUG] Clé présente: {bool(api_key)}")
-    if not api_key:
-        st.error("🛑 Clé OCR_SPACE_API_KEY manquante")
-        return ""
-    uploaded_file.seek(0)
-    data = uploaded_file.read()
-    ext = uploaded_file.name.lower().split(".")[-1]
-    mime = {
-        "pdf": "application/pdf",
-        "jpg": "image/jpeg", "jpeg": "image/jpeg",
-        "png": "image/png"
-    }.get(ext)
-    if not mime:
-        st.error(f"🛑 Format non supporté : .{ext}")
-        return ""
+    st.write("🔑 Clé OCR_SPACE_API_KEY chargée ?", bool(api_key))
+    if api_key and ext in ("pdf","jpg","jpeg","png"):
+        uploaded.seek(0)
+        data = uploaded.read()
+        mime = {
+            "pdf": "application/pdf",
+            "jpg":"image/jpeg","jpeg":"image/jpeg",
+            "png":"image/png"
+        }[ext]
+        resp = requests.post(
+            "https://api.ocr.space/parse/image",
+            files={"file": (uploaded.name, data, mime)},
+            data={"apikey": api_key, "language":"fre"},
+            timeout=60
+        )
+        st.write("📋 OCR.space HTTP stat :", resp.status_code)
+        st.subheader("📋 OCR.space raw JSON")
+        st.code(resp.text, language="json")
 
-    resp = requests.post(
-        "https://api.ocr.space/parse/image",
-        files={"file": (uploaded_file.name, data, mime)},
-        data={"apikey": api_key, "language": "fre", "isOverlayRequired": False},
-        timeout=60
-    )
-    st.subheader("📋 JSON brut OCR.space")
-    st.code(resp.text, language="json")  # scrollable
+    # On s'arrête là pour confirmer que l'UI et les appels fonctionnent
+    st.stop()
 
-    if resp.status_code != 200:
-        st.error(f"🛑 HTTP {resp.status_code} depuis OCR.space")
-        return ""
-    j = resp.json()
-    if j.get("IsErroredOnProcessing"):
-        st.error("🛑 OCR.space a retourné une erreur: " + str(j.get("ErrorMessage")))
-        return ""
-    texts = [p.get("ParsedText","") for p in j.get("ParsedResults",[])]
-    full = "\n".join(texts)
-    st.write(f"✏️ [DEBUG] OCR.text length = {len(full)}")
-    return full
+st.write("ℹ️ Aucun fichier uploadé, fin de debug.")
