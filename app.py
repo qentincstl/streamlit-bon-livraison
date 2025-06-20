@@ -1,91 +1,111 @@
+# app.py
 import streamlit as st
-import requests
 import pandas as pd
-from fpdf import FPDF
-from io import BytesIO
+import requests
+import io
 import re
 
-st.set_page_config(page_title="Bon de Livraison OCR", layout="centered")
-st.title("📄 Extraction de bons de livraison manuscrits (OCR cloud)")
+st.set_page_config(page_title="Fiche de réception", layout="wide")
+st.title("📥 Documents de réception → FICHE DE RECEPTION")
 
-OCR_API_KEY = st.secrets["OCR_SPACE_API_KEY"]
+# OCR.space API (gratuit jusqu'à 25 000 car./j)
+OCR_API_KEY = st.secrets.get("K82803521888957", "")
 
-def ocr_space_file(file, api_key):
+def ocr_space_file(file_bytes: bytes) -> str:
+    """Appel à OCR.space pour extraire tout le texte d'un PDF/image."""
     payload = {
-        'isOverlayRequired': False,
-        'apikey': api_key,
-        'language': 'fre',
-        'isCreateSearchablePdf': False,
+        "apikey": OCR_API_KEY,
+        "language": "fre",
+        "isOverlayRequired": False
     }
-    files = {'file': file}
-    r = requests.post('https://api.ocr.space/parse/image',
-                      files=files,
-                      data=payload)
-    return r.json()
+    files = {"file": file_bytes}
+    r = requests.post("https://api.ocr.space/parse/image",
+                      files=files, data=payload)
+    r.raise_for_status()
+    result = r.json()
+    if result.get("IsErroredOnProcessing"):
+        st.error("Erreur OCR : " + result.get("ErrorMessage", ["?"])[0])
+        return ""
+    texts = [p["ParsedText"] for p in result.get("ParsedResults", [])]
+    return "\n".join(texts)
 
-def extract_data(text):
-    pattern = r"(?i)(\d+)\s*colis.*?(\d+)\s*pi[eè]ce.*?ref(?:[ée]rence)?\s*[:\-]?\s*(\S+)"
-    matches = re.findall(pattern, text)
-    data = []
-    for match in matches:
-        colis, pieces, ref = match
-        commentaire = ""
-        try:
-            colis = int(colis)
-            pieces = int(pieces)
-        except:
-            commentaire = "*Erreur corrigée"
-        data.append({
-            "Nombre de colis": colis,
-            "Pièces par colis": pieces,
-            "Référence": ref,
-            "Commentaire": commentaire
-        })
-    if not data:
-        data.append({
-            "Nombre de colis": "",
-            "Pièces par colis": "",
-            "Référence": "",
-            "Commentaire": "*Aucune donnée détectée"
-        })
-    return pd.DataFrame(data)
+def parse_text_to_df(raw: str) -> pd.DataFrame:
+    """
+    Transforme le texte OCR en DataFrame avec colonnes :
+    EAN, Désignation produits, Nb de colis, pcs par colis, total, Vérification
+    """
+    rows = []
+    for line in raw.splitlines():
+        line = line.strip()
+        # on cherche : EAN (8–13 chiffres), texte désignation, nb_colis, pcs_colis
+        m = re.match(r"^(\d{8,13})\s+(.+?)\s+(\d+)\s+(\d+)$", line)
+        if m:
+            ean, name, colis, pcs = m.groups()
+            colis_i = int(colis)
+            pcs_i = int(pcs)
+            total = colis_i * pcs_i
+            rows.append({
+                "EAN": ean,
+                "Désignation produits": name,
+                "Nb de colis": colis_i,
+                "pcs par colis": pcs_i,
+                "total": total,
+                "Vérification": ""
+            })
+    if not rows:
+        st.warning("Aucune ligne valide détectée dans le texte OCR.")
+    return pd.DataFrame(rows)
 
-def dataframe_to_pdf(df):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    for i, row in df.iterrows():
-        line = f"{row['Nombre de colis']} colis, {row['Pièces par colis']} pièces, Réf: {row['Référence']} {row['Commentaire']}"
-        pdf.cell(200, 10, txt=line, ln=True)
-    buffer = BytesIO()
-    pdf.output(buffer, 'S')  # 'S' = output as string
-    return buffer.getvalue()
+def read_excel_to_df(buf: io.BytesIO) -> pd.DataFrame:
+    """Lit un Excel existant et le reformate/re-nomme ses colonnes si besoin."""
+    df = pd.read_excel(buf)
+    # on suppose qu'il contient déjà EAN, Désignation…, Nb de colis, pcs par colis
+    df = df.rename(columns={
+        df.columns[0]: "EAN",
+        df.columns[1]: "Désignation produits",
+        df.columns[2]: "Nb de colis",
+        df.columns[3]: "pcs par colis"
+    })
+    df["total"] = df["Nb de colis"] * df["pcs par colis"]
+    df["Vérification"] = ""
+    return df[[
+        "EAN", "Désignation produits",
+        "Nb de colis", "pcs par colis",
+        "total", "Vérification"
+    ]]
 
-uploaded_file = st.file_uploader("Déposez un PDF scanné (bon manuscrit)", type=["pdf", "jpeg", "jpg", "png"])
+uploaded = st.file_uploader(
+    "📂 Déposez un PDF, image (JPG/PNG) ou un fichier Excel",
+    type=["pdf", "jpg", "jpeg", "png", "xlsx"]
+)
 
-if uploaded_file:
-    with st.spinner("🔍 Lecture OCR en cours..."):
-        try:
-            result = ocr_space_file(uploaded_file, OCR_API_KEY)
+if uploaded:
+    ext = uploaded.name.split(".")[-1].lower()
+    if ext in ("xlsx",):
+        # Lecture Excel
+        df = read_excel_to_df(io.BytesIO(uploaded.read()))
+    else:
+        # OCR sur PDF ou image
+        raw_text = ocr_space_file(uploaded)
+        if raw_text:
+            df = parse_text_to_df(raw_text)
+        else:
+            df = pd.DataFrame(columns=[
+                "EAN", "Désignation produits",
+                "Nb de colis", "pcs par colis",
+                "total", "Vérification"
+            ])
+    st.success("✅ Données extraites")
+    st.dataframe(df, use_container_width=True)
 
-            if result.get("IsErroredOnProcessing"):
-                st.error("❌ Erreur du service OCR.space : " + result.get("ErrorMessage", ["Erreur inconnue"])[0])
-            else:
-                # Concaténer tous les textes détectés dans ParsedResults
-                parsed_texts = [r["ParsedText"] for r in result.get("ParsedResults", [])]
-                full_text = "\n".join(parsed_texts).strip()
-
-                if full_text:
-                    st.success("✅ Texte OCR extrait avec succès")
-                    with st.expander("📄 Voir le texte brut OCR"):
-                        st.text(full_text)
-
-                    df = extract_data(full_text)
-                    st.dataframe(df)
-
-                    pdf_bytes = dataframe_to_pdf(df)
-                    st.download_button("📥 Télécharger les résultats en PDF", data=pdf_bytes, file_name="bon_livraison_resultat.pdf", mime="application/pdf")
-                else:
-                    st.warning("⚠️ Le service OCR n'a retourné aucun texte lisible. Vérifie la qualité du scan.")
-        except Exception as e:
-            st.error(f"❌ Erreur inattendue : {str(e)}")
+    # Préparation du fichier Excel à télécharger
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="FICHE DE RECEPTION")
+    buffer.seek(0)
+    st.download_button(
+        label="📥 Télécharger la FICHE DE RECEPTION",
+        data=buffer,
+        file_name="fiche_de_reception.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
