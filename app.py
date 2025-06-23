@@ -14,7 +14,7 @@ st.markdown("""
   .debug { font-size:0.9rem; color:#888; }
 </style>
 """, unsafe_allow_html=True)
-st.markdown('<h1 class="section-title">Fiche de réception (OCR via GPT-4o Vision)</h1>', unsafe_allow_html=True)
+st.markdown("<h1 class=\"section-title\">Fiche de réception (OCR via GPT-4o Vision)</h1>", unsafe_allow_html=True)
 
 # --- OpenAI KEY ---
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
@@ -24,11 +24,13 @@ if not OPENAI_API_KEY:
 openai.api_key = OPENAI_API_KEY
 
 # --- Fonctions utilitaires ---
+@st.cache_data(show_spinner=False)
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pix = doc[0].get_pixmap(dpi=300)
     return Image.open(io.BytesIO(pix.tobytes("png")))
 
+@st.cache_data(show_spinner=False)
 def call_gpt4o_with_image(img: Image.Image):
     buf = io.BytesIO(); img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
@@ -73,7 +75,7 @@ def call_gpt4o_with_image(img: Image.Image):
 
 # --- INTERFACE ---
 st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
-uploaded = st.file_uploader("Importez votre PDF ou photo de bon de livraison")
+uploaded = st.file_uploader("Importez votre PDF ou photo de bon de livraison", key="file_uploader")
 
 if not uploaded:
     st.stop()
@@ -129,3 +131,4 @@ st.download_button("Télécharger la fiche de réception", data=out,
                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                    use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
+
