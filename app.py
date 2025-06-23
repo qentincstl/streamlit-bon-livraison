@@ -3,9 +3,8 @@ import pandas as pd
 import openai, io, json, base64, time
 import fitz              # PyMuPDF
 from PIL import Image
-from openai.error import RateLimitError
 
-# --- 0️⃣ Configuration page & style ---
+# --- 0️⃣ Config de la page & style ---
 st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
 st.markdown("""
 <style>
@@ -22,6 +21,9 @@ if not OPENAI_API_KEY:
     st.error("🛑 Définissez `OPENAI_API_KEY` dans les Secrets.")
     st.stop()
 openai.api_key = OPENAI_API_KEY
+
+# Exception à catcher
+RateLimitError = openai.error.RateLimitError
 
 # --- 2️⃣ Helper : PDF → PIL.Image (1ʳᵉ page) ---
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
@@ -55,20 +57,19 @@ def extract_table_via_gpt(img_bytes: bytes) -> pd.DataFrame:
         }
     }
 
-    # on essaie jusqu'à 3 fois avec backoff
     for attempt in range(3):
         try:
             resp = openai.chat.completions.create(
-                model="gpt-4o",  # ou "gpt-3.5-turbo" si besoin
+                model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "Tu es un OCR-table-parser, renvoie strictement du JSON."},
-                    {"role": "user",   "content": "Parse cette image en JSON."}
+                    {"role":"system","content":"Tu es un OCR-table-parser, renvoie strictement du JSON."},
+                    {"role":"user","content":"Parse cette image en JSON."}
                 ],
                 functions=[fn_schema],
                 function_call={
                     "name": "parse_delivery_note",
                     "arguments": json.dumps({"image_base64": b64})
-                },
+                }
             )
             break
         except RateLimitError:
@@ -79,7 +80,6 @@ def extract_table_via_gpt(img_bytes: bytes) -> pd.DataFrame:
         st.error("❌ Trop de requêtes, réessaie plus tard ou change de modèle.")
         return pd.DataFrame(columns=["Référence","Nb de colis","pcs par colis","total","Vérification"])
 
-    # on parse la réponse
     args = resp.choices[0].message.function_call.arguments
     data = json.loads(args)
     df = pd.DataFrame(data["lines"])
@@ -98,28 +98,23 @@ if uploaded:
     raw = uploaded.read()
     ext = uploaded.name.lower().rsplit(".", 1)[-1]
 
-    # convertir PDF→Image ou charger l’image
     if ext == "pdf":
         img = pdf_to_image(raw)
     else:
         img = Image.open(io.BytesIO(raw))
 
-    # affichage
     st.markdown('<div class="card"><div class="section-title">🔍 Aperçu de l’image</div>', unsafe_allow_html=True)
     st.image(img, use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # OCR + parsing
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     df = extract_table_via_gpt(buf.getvalue())
 
-    # résultats
     st.markdown('<div class="card"><div class="section-title">📊 Résultats extraits</div>', unsafe_allow_html=True)
     st.dataframe(df, use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # export
     st.markdown('<div class="card"><div class="section-title">💾 Export Excel</div>', unsafe_allow_html=True)
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
