@@ -31,8 +31,8 @@ def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
     return Image.open(io.BytesIO(pix.tobytes("png")))
 
 @st.cache_data(show_spinner=False)
-def call_gpt4o_with_image(img: Image.Image):
-    buf = io.BytesIO(); img.save(buf, format="PNG")
+def call_gpt4o_with_image(_img: Image.Image):
+    buf = io.BytesIO(); _img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
 
     fn_schema = {
@@ -96,7 +96,7 @@ st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('<div class="card"><div class="section-title">3. Extraction & JSON brut</div>', unsafe_allow_html=True)
 try:
-    resp = call_gpt4o_with_image(img)
+    resp = call_gpt4o_with_image(_img)
     raw_json = resp.choices[0].message.function_call.arguments
     st.code(raw_json, language="json")
 except Exception as e:
