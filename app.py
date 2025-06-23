@@ -131,4 +131,3 @@ st.download_button("Télécharger la fiche de réception", data=out,
                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                    use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
-
