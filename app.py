@@ -1,10 +1,9 @@
 import streamlit as st
 import pandas as pd
 import openai, io, json, base64, hashlib
-import fitz  # PyMuPDF
+import fitz
 from PIL import Image
 
-# --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
 st.markdown("""
 <style>
@@ -14,18 +13,14 @@ st.markdown("""
   .debug { font-size:0.9rem; color:#888; }
 </style>
 """, unsafe_allow_html=True)
-st.markdown("**Version du code : v2**", unsafe_allow_html=True)
 st.markdown("<h1 class=\"section-title\">Fiche de réception (OCR via GPT-4o Vision)</h1>", unsafe_allow_html=True)
 
-# --- OpenAI KEY ---
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 if not OPENAI_API_KEY:
     st.error("🛑 Ajoutez `OPENAI_API_KEY` dans les Secrets de Streamlit Cloud.")
     st.stop()
 openai.api_key = OPENAI_API_KEY
 
-# --- Fonctions utilitaires ---
-@st.cache_data(show_spinner=False)
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pix = doc[0].get_pixmap(dpi=300)
@@ -36,25 +31,29 @@ def call_gpt4o_with_image(img: Image.Image):
     b64 = base64.b64encode(buf.getvalue()).decode()
 
     fn_schema = {
-        "name": "parse_delivery_note",
-        "description": "Retourne un JSON : liste d'objets {reference, nb_colis, pcs_par_colis}",
+        "name": "extract_order_data",
+        "description": "Retourne un JSON : liste d'objets {reference, style, marque, produit, nb_colis, nb_pieces, total}",
         "parameters": {
             "type": "object",
             "properties": {
-                "lines": {
+                "lignes": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
                             "reference": {"type": "string"},
+                            "style": {"type": "string"},
+                            "marque": {"type": "string"},
+                            "produit": {"type": "string"},
                             "nb_colis": {"type": "integer"},
-                            "pcs_par_colis": {"type": "integer"}
+                            "nb_pieces": {"type": "integer"},
+                            "total": {"type": "number"}
                         },
-                        "required": ["reference", "nb_colis", "pcs_par_colis"]
+                        "required": ["reference", "style", "marque", "produit", "nb_colis", "nb_pieces", "total"]
                     }
                 }
             },
-            "required": ["lines"]
+            "required": ["lignes"]
         }
     }
 
@@ -62,20 +61,36 @@ def call_gpt4o_with_image(img: Image.Image):
         model="gpt-4o",
         temperature=0,
         messages=[
-            {"role": "system", "content":
-                "Tu es un OCR spécialisé pour extraire les tableaux de bons de livraison manuscrits ou imprimés. "
-                "Rends uniquement le JSON du tableau avec les champs référence, nb_colis, pcs_par_colis."
+            {
+                "role": "system",
+                "content":
+"""Je vais uploader des bons de commande, et je souhaite que tu en extraies toutes les informations suivantes : la référence, le style, la marque, le produit, le nombre de colis, le nombre de pièces, le total. Ensuite, tu devras transformer ces données en un fichier Excel.
+
+## Output Format
+Le fichier Excel doit contenir une ligne par entrée extraite, avec les colonnes suivantes dans cet ordre :
+- Référence (texte)
+- Style (texte)
+- Marque (texte)
+- Produit (texte)
+- Nombre de colis (nombre entier)
+- Nombre de pièces (nombre entier)
+- Total (nombre entier ou décimal)
+
+Si une information est absente d’un bon de commande, laisse la cellule correspondante vide dans le fichier Excel."""
             },
-            {"role": "user", "content": "Lis ce document et retourne le JSON structuré."}
+            {
+                "role": "user",
+                "content": "Lis ce document et retourne le JSON structuré."
+            }
         ],
         functions=[fn_schema],
-        function_call={"name": "parse_delivery_note", "arguments": json.dumps({"image_base64": b64})}
+        function_call={"name": "extract_order_data", "arguments": json.dumps({"image_base64": b64})}
     )
     return resp
 
 # --- INTERFACE ---
 st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
-uploaded = st.file_uploader("Importez votre PDF ou photo de bon de livraison", key="file_uploader")
+uploaded = st.file_uploader("Importez votre PDF ou photo de bon de commande", key="file_uploader")
 
 if not uploaded:
     st.stop()
@@ -105,14 +120,16 @@ except Exception as e:
 st.markdown('</div>', unsafe_allow_html=True)
 
 try:
-    data = json.loads(raw_json)['lines']
-    df = pd.DataFrame(data).rename(columns={
+    lignes = json.loads(raw_json)['lignes']
+    df = pd.DataFrame(lignes).rename(columns={
         'reference': 'Référence',
-        'nb_colis': 'Nb de colis',
-        'pcs_par_colis': 'pcs par colis'
+        'style': 'Style',
+        'marque': 'Marque',
+        'produit': 'Produit',
+        'nb_colis': 'Nombre de colis',
+        'nb_pieces': 'Nombre de pièces',
+        'total': 'Total'
     })
-    df['total'] = df['Nb de colis'] * df['pcs par colis']
-    df['Vérification'] = ''
 except Exception as e:
     st.error(f"Erreur lors du parsing JSON : {e}")
     st.stop()
@@ -124,10 +141,10 @@ st.markdown('</div>', unsafe_allow_html=True)
 st.markdown('<div class="card"><div class="section-title">5. Export Excel</div>', unsafe_allow_html=True)
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
-    df.to_excel(writer, index=False, sheet_name="FICHE_DE_RECEPTION")
+    df.to_excel(writer, index=False, sheet_name="BON_DE_COMMANDE")
 out.seek(0)
-st.download_button("Télécharger la fiche de réception", data=out,
-                   file_name="fiche_de_reception.xlsx",
+st.download_button("Télécharger le fichier Excel", data=out,
+                   file_name="bon_de_commande.xlsx",
                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                    use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
