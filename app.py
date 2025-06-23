@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
-import openai, io, json, base64
-import fitz  # PyMuPDF
+import openai, io, json, base64, time
+import fitz              # PyMuPDF
 from PIL import Image
+from openai.error import RateLimitError
 
-# --- 0️⃣ Configuration de la page & style ---
+# --- 0️⃣ Configuration page & style ---
 st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
 st.markdown("""
 <style>
@@ -15,38 +16,25 @@ st.markdown("""
 """, unsafe_allow_html=True)
 st.markdown('<h1 class="section-title">📥 Fiche de réception (GPT-4 Vision)</h1>', unsafe_allow_html=True)
 
-
 # --- 1️⃣ Init OpenAI ---
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-openai.api_key = OPENAI_API_KEY
-
-# ─── Bloc de test ─────────────────────────────────────────────────────────────
-if st.button("🧪 Test texte GPT-4"):
-    resp = openai.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role":"user","content":"Hello, combien de tokens ce message utilise ?"}]
-    )
-    st.json({ "usage": resp.usage, "reply": resp.choices[0].message.content })
-    st.stop()
-# ────────────────────────────────────────────────────────────────────────────────
-
-# --- 2️⃣ Le reste de ton code (upload, OCR, etc.) ---
-    st.error("🛑 Définis `OPENAI_API_KEY` dans les Secrets.")
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
+if not OPENAI_API_KEY:
+    st.error("🛑 Définissez `OPENAI_API_KEY` dans les Secrets.")
     st.stop()
 openai.api_key = OPENAI_API_KEY
 
-# --- 2️⃣ Helper : convertir PDF → PIL.Image (première page) ---
+# --- 2️⃣ Helper : PDF → PIL.Image (1ʳᵉ page) ---
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pix = doc[0].get_pixmap(dpi=300)
     return Image.open(io.BytesIO(pix.tobytes("png")))
 
-# --- 3️⃣ OCR + parsing via GPT-4 Vision Functions v2 ---
+# --- 3️⃣ OCR + parsing via GPT-4 Vision w/ retry backoff ---
 def extract_table_via_gpt(img_bytes: bytes) -> pd.DataFrame:
     b64 = base64.b64encode(img_bytes).decode()
     fn_schema = {
         "name": "parse_delivery_note",
-        "description": "Retourne JSON: liste d'objets {reference, nb_colis, pcs_par_colis}",
+        "description": "Retourne la liste des lignes {reference, nb_colis, pcs_par_colis}",
         "parameters": {
             "type": "object",
             "properties": {
@@ -66,16 +54,32 @@ def extract_table_via_gpt(img_bytes: bytes) -> pd.DataFrame:
             "required": ["lines"]
         }
     }
-    resp = openai.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role":"system","content":"Tu es un OCR-table-parser, renvoie strictement du JSON."},
-            {"role":"user","content":"Parse this delivery note image into JSON lines."}
-        ],
-        functions=[fn_schema],
-        function_call={"name":"parse_delivery_note",
-                       "arguments": json.dumps({"image_base64": b64})}
-    )
+
+    # on essaie jusqu'à 3 fois avec backoff
+    for attempt in range(3):
+        try:
+            resp = openai.chat.completions.create(
+                model="gpt-4o",  # ou "gpt-3.5-turbo" si besoin
+                messages=[
+                    {"role": "system", "content": "Tu es un OCR-table-parser, renvoie strictement du JSON."},
+                    {"role": "user",   "content": "Parse cette image en JSON."}
+                ],
+                functions=[fn_schema],
+                function_call={
+                    "name": "parse_delivery_note",
+                    "arguments": json.dumps({"image_base64": b64})
+                },
+            )
+            break
+        except RateLimitError:
+            wait = 2 ** attempt
+            st.warning(f"Quota épuisé, nouvelle tentative dans {wait}s… ({attempt+1}/3)")
+            time.sleep(wait)
+    else:
+        st.error("❌ Trop de requêtes, réessaie plus tard ou change de modèle.")
+        return pd.DataFrame(columns=["Référence","Nb de colis","pcs par colis","total","Vérification"])
+
+    # on parse la réponse
     args = resp.choices[0].message.function_call.arguments
     data = json.loads(args)
     df = pd.DataFrame(data["lines"])
@@ -94,13 +98,13 @@ if uploaded:
     raw = uploaded.read()
     ext = uploaded.name.lower().rsplit(".", 1)[-1]
 
-    # Convert PDF to image or load directly
+    # convertir PDF→Image ou charger l’image
     if ext == "pdf":
         img = pdf_to_image(raw)
     else:
         img = Image.open(io.BytesIO(raw))
 
-    # Affichage de l’image
+    # affichage
     st.markdown('<div class="card"><div class="section-title">🔍 Aperçu de l’image</div>', unsafe_allow_html=True)
     st.image(img, use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
@@ -110,12 +114,12 @@ if uploaded:
     img.save(buf, format="PNG")
     df = extract_table_via_gpt(buf.getvalue())
 
-    # Affichage des résultats
+    # résultats
     st.markdown('<div class="card"><div class="section-title">📊 Résultats extraits</div>', unsafe_allow_html=True)
     st.dataframe(df, use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Export Excel
+    # export
     st.markdown('<div class="card"><div class="section-title">💾 Export Excel</div>', unsafe_allow_html=True)
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
