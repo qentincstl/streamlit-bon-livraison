@@ -60,7 +60,7 @@ def extract_json_block(s):
     return max(matches, key=len)
 
 prompt = (
-    prompt = (
+   
     "Tu es un assistant expert en logistique.\n"
     "Tu reçois un bon de livraison PDF, souvent sur plusieurs pages.\n"
     "Ta mission : extraire, consolider et restituer la liste des produits reçus sous forme de tableau Excel.\n"
