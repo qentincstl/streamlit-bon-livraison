@@ -60,41 +60,30 @@ def extract_json_block(s):
     return max(matches, key=len)
 
 prompt = (
-{"role": "system", "content": """
-Tu es un expert en OCR pour bons de livraison. Ta tâche est d'extraire **tous les produits listés** dans le document et de générer une liste structurée, même si le document contient plusieurs pages.
-
-Pour chaque ligne, retourne un objet avec les champs suivants :
-
-- reference : la référence produit (code interne ou fournisseur), alphanumérique
-- code_ean : le code EAN (code-barres numérique si disponible, sinon vide)
-- style : (texte) le style du produit s’il est indiqué
-- marque : (texte) la marque du produit
-- produit : (texte) la désignation du produit
-- nb_colis : (entier) nombre de colis
-- nb_pieces : (entier) nombre total de pièces
-- total : (entier ou décimal) total indiqué
-- alerte : valeur de l’alerte si mentionnée (sinon vide)
-
-💡 Important : Ne jamais confondre le code EAN avec la référence produit. Le code EAN est toujours purement numérique (ex : 61045320), alors que la référence peut contenir des lettres (ex : V1V073DM). Si un produit contient les deux, extrais les deux.
-
-Retourne uniquement le JSON au format suivant :  
-{
-  "lines": [
-    {
-      "reference": "...",
-      "code_ean": "...",
-      "style": "...",
-      "marque": "...",
-      "produit": "...",
-      "nb_colis": ...,
-      "nb_pieces": ...,
-      "total": ...,
-      "alerte": ...
-    }
-  ]
-}
-"""},
+    "Tu es un assistant expert en logistique.\n"
+    "Tu reçois un bon de livraison PDF, souvent sur plusieurs pages.\n"
+    "Ta mission : extraire, consolider et restituer la liste des produits reçus sous forme de tableau Excel.\n"
+    "\n"
+    "Procédure à suivre :\n"
+    "1. Lis chaque ligne du document et extrais toutes les informations suivantes si disponibles : Référence (code article), Style, Marque, Produit (désignation), Nombre de colis, Nombre de pièces par colis, Total de pièces.\n"
+    "2. Si un même article (même référence, EAN, ou nom de produit) est présent sur plusieurs lignes (par exemple, réparti sur plusieurs palettes ou colis), additionne les colis et les quantités.\n"
+    "3. Si le document contient un récapitulatif global (ex : Total units, Nb colis), utilise-le pour corriger ou vérifier tes sommes. Si tu détectes un écart, indique-le dans un champ 'Alerte'.\n"
+    "4. Ignore les informations non pertinentes (dimension, poids, batch, customs, etc).\n"
+    "5. Le résultat final doit être une liste d’objets, un par produit, avec les colonnes suivantes dans cet ordre :\n"
+    "    - Référence (texte)\n"
+    "    - Style (texte)\n"
+    "    - Marque (texte)\n"
+    "    - Produit (texte)\n"
+    "    - Nombre de colis (entier)\n"
+    "    - Nombre de pièces (entier)\n"
+    "    - Total (entier)\n"
+    "    - Alerte (texte)\n"
+    "Si une information est absente du document, laisse la cellule vide.\n"
+    "Réponds uniquement par un JSON array, par exemple :\n"
+    "[{\"Référence\": \"525017\", \"Style\": \"\", \"Marque\": \"\", \"Produit\": \"Muffins Chocolat\", \"Nombre de colis\": 12, \"Nombre de pièces\": 96, \"Total\": 816, \"Alerte\": \"\"}]\n"
+    "N’ajoute aucun texte autour, ne mets rien avant/après le JSON."
 )
+
 # --- INTERFACE ---
 st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
 uploaded = st.file_uploader("Importez votre PDF (plusieurs pages) ou photo de bon de commande", key="file_uploader")
