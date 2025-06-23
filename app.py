@@ -60,25 +60,24 @@ def extract_json_block(s):
     return max(matches, key=len)
 
 prompt = (
-   
-   Tu es un expert en OCR pour bons de livraison. Ta tâche est d'extraire **tous les produits listés** dans le document et de générer une liste structurée, même si le document contient plusieurs pages.
+{"role": "system", "content": """
+Tu es un expert en OCR pour bons de livraison. Ta tâche est d'extraire **tous les produits listés** dans le document et de générer une liste structurée, même si le document contient plusieurs pages.
 
 Pour chaque ligne, retourne un objet avec les champs suivants :
 
-- **reference** : la référence produit (code interne ou fournisseur), alphanumérique
-- **code_ean** : le code EAN (code-barres numérique si disponible, sinon vide)
-- **style** : (texte) le style du produit s’il est indiqué
-- **marque** : (texte) la marque du produit
-- **produit** : (texte) la désignation du produit
-- **nb_colis** : (entier) nombre de colis
-- **nb_pieces** : (entier) nombre total de pièces
-- **total** : (entier ou décimal) total indiqué
-- **alerte** : valeur de l’alerte si mentionnée (sinon vide)
+- reference : la référence produit (code interne ou fournisseur), alphanumérique
+- code_ean : le code EAN (code-barres numérique si disponible, sinon vide)
+- style : (texte) le style du produit s’il est indiqué
+- marque : (texte) la marque du produit
+- produit : (texte) la désignation du produit
+- nb_colis : (entier) nombre de colis
+- nb_pieces : (entier) nombre total de pièces
+- total : (entier ou décimal) total indiqué
+- alerte : valeur de l’alerte si mentionnée (sinon vide)
 
-💡 **Important** : Ne jamais confondre le code EAN avec la référence produit. Le code EAN est toujours purement numérique (ex : 61045320), alors que la référence peut contenir des lettres (ex : V1V073DM). Si un produit contient les deux, extrais les deux.
+💡 Important : Ne jamais confondre le code EAN avec la référence produit. Le code EAN est toujours purement numérique (ex : 61045320), alors que la référence peut contenir des lettres (ex : V1V073DM). Si un produit contient les deux, extrais les deux.
 
 Retourne uniquement le JSON au format suivant :  
-```json
 {
   "lines": [
     {
@@ -94,6 +93,7 @@ Retourne uniquement le JSON au format suivant :
     }
   ]
 }
+"""},
 # --- INTERFACE ---
 st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
 uploaded = st.file_uploader("Importez votre PDF (plusieurs pages) ou photo de bon de commande", key="file_uploader")
