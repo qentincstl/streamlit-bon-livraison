@@ -32,22 +32,31 @@ def extract_images_from_pdf(pdf_bytes: bytes):
         imgs.append(Image.open(io.BytesIO(pix.tobytes("png"))))
     return imgs
 
+
+def downscale_image(img: Image.Image, max_width=800) -> Image.Image:
+    w, h = img.size
+    if w <= max_width:
+        return img
+    ratio = max_width / float(w)
+    new_h = int(h * ratio)
+    return img.resize((max_width, new_h), Image.LANCZOS)
+
+
 def extract_json_block(s: str) -> str:
     m = re.findall(r'(\[.*?\]|\{.*?\})', s, flags=re.DOTALL)
     if not m:
         raise ValueError("Aucun JSON trouvé.")
     return max(m, key=len)
 
+
 def call_gpt4o_with_image(img: Image.Image, prompt: str) -> str:
-    # Convertit l'image en base64
     buf = io.BytesIO(); img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
-    # Crée un seul content texte avec prompt + image
     content = prompt + "\n\n[IMAGE_BASE64]\n" + b64
     res = openai.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role":"system", "content": content}
+            {"role": "system", "content": content}
         ],
         temperature=0,
         max_tokens=1500
@@ -73,10 +82,10 @@ prompt = (
     "2) Si un même article apparaît plusieurs fois, fais la somme des colis et pièces.\n"
     "3) Ignore les dimensions, poids, batch, etc.\n"
     "4) Si le document contient un total global, utilise-le pour vérifier et note tout écart dans 'Alerte'.\n"
-    "Réponds **SEULEMENT** par un **JSON array**.\n"
+    "Réponds SEULEMENT par un JSON array.\n"
     "Exemple :\n"
-    "[{\"Référence\":\"525017\",\"EAN\":\"3564700012591\","
-    "\"Style\":\"\",\"Marque\":\"\",\"Produit\":\"Muffins Chocolat\","
+    "[{\"Référence\":\"525017\",\"EAN\":\"3564700012591\"," +
+    "\"Style\":\"\",\"Marque\":\"\",\"Produit\":\"Muffins Chocolat\"," +
     "\"Nombre de colis\":12,\"Nombre de pièces\":96,\"Total\":816,\"Alerte\":\"\"}]"
 )
 
@@ -96,17 +105,19 @@ images = extract_images_from_pdf(file_bytes) if ext=="pdf" else [Image.open(io.B
 
 # Aperçu
 st.markdown('<div class="card"><div class="section-title">2. Aperçu</div>', unsafe_allow_html=True)
-for i,img in enumerate(images):
-    st.image(img, caption=f"Page {i+1}", use_container_width=True)
+for i, img in enumerate(images):
+    img_small = downscale_image(img)
+    st.image(img_small, caption=f"Page {i+1}", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
 # Extraction & parsing
 all_lines = []
 st.markdown('<div class="card"><div class="section-title">3. Extraction JSON</div>', unsafe_allow_html=True)
-for i,img in enumerate(images):
+for i, img in enumerate(images):
     st.markdown(f"##### Analyse page {i+1}")
     try:
-        out = call_gpt4o_with_image(img, prompt)
+        img_small = downscale_image(img)
+        out = call_gpt4o_with_image(img_small, prompt)
         st.code(out, language="json")
         clean = extract_json_block(out)
         lines = json.loads(clean)
