@@ -89,8 +89,20 @@ except Exception as e:
     st.stop()
 st.markdown('</div>', unsafe_allow_html=True)
 
+import re
+
+def extract_json_block(s):
+    # Cherche le plus gros bloc entre crochets ou accolades
+    json_regex = re.compile(r'(\[.*?\]|\{.*?\})', re.DOTALL)
+    matches = json_regex.findall(s)
+    if not matches:
+        raise ValueError("Aucun JSON trouvé dans la sortie du modèle.")
+    # On prend le plus long (en général le bon bloc)
+    return max(matches, key=len)
+
 try:
-    df = pd.DataFrame(json.loads(output))
+    output_clean = extract_json_block(output)
+    df = pd.DataFrame(json.loads(output_clean))
 except Exception as e:
     st.error(f"Erreur lors du parsing JSON : {e}")
     st.stop()
