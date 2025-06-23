@@ -96,7 +96,7 @@ st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('<div class="card"><div class="section-title">3. Extraction & JSON brut</div>', unsafe_allow_html=True)
 try:
-    resp = call_gpt4o_with_image(_img)
+    resp = call_gpt4o_with_image(img)
     raw_json = resp.choices[0].message.function_call.arguments
     st.code(raw_json, language="json")
 except Exception as e:
