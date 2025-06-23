@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import openai, io, json
+import openai, io, json, base64
 import fitz               # PyMuPDF
 from PIL import Image
 
@@ -9,8 +9,8 @@ st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="�
 st.markdown("""
 <style>
   .card { background:white; padding:1.5rem; border-radius:0.5rem;
-          box-shadow:0 4px 6px rgba(0,0,0,0.1); margin-bottom:2rem; }
-  .section-title { font-size:1.6rem; color:#4A90E2; margin-bottom:0.5rem; }
+          box-shadow:0 4px 6px rgba(0,0,0,0.1); margin-bottom:2rem;}
+  .section-title { font-size:1.6rem; color:#4A90E2; margin-bottom:0.5rem;}
 </style>
 """, unsafe_allow_html=True)
 st.markdown('<div class="section-title">📥 Documents de réception → FICHE DE RÉCEPTION</div>', unsafe_allow_html=True)
@@ -22,20 +22,18 @@ if not OPENAI_API_KEY:
     st.stop()
 openai.api_key = OPENAI_API_KEY
 
-# --- 2️⃣ Helper PDF→Image ---
+# --- 2️⃣ PDF→Image helper ---
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pix = doc[0].get_pixmap(dpi=300)
     return Image.open(io.BytesIO(pix.tobytes("png")))
 
-# --- 3️⃣ Fonction d’appel OCR+parsing via GPT-4 Vision ---
+# --- 3️⃣ Extraction via GPT-4 Vision + JSON parsing ---
 def extract_table_via_gpt(img_bytes: bytes) -> pd.DataFrame:
-    # on encode l'image en base64
     b64 = base64.b64encode(img_bytes).decode()
-    # on définit une fonction fictive pour récupérer JSON structuré
     fn_schema = {
         "name": "parse_delivery_note",
-        "description": "Retourne la liste des lignes avec référence, nb_colis et pcs_par_colis",
+        "description": "Retourne la liste des lignes avec reference, nb_colis et pcs_par_colis",
         "parameters": {
             "type": "object",
             "properties": {
@@ -55,19 +53,17 @@ def extract_table_via_gpt(img_bytes: bytes) -> pd.DataFrame:
             "required": ["lines"]
         }
     }
-
     resp = openai.ChatCompletion.create(
-        model="gpt-4o-mini",               # ou "gpt-4-vision-preview"
+        model="gpt-4o-mini",
         messages=[
-            {"role":"system","content":"Tu es un OCR-table-parser, retourne seulement JSON."},
-            {"role":"user","content":"Parse this delivery note into JSON."}
+            {"role":"system","content":"Tu es un OCR-table-parser, retourne juste du JSON structuré."},
+            {"role":"user","content":"Parse this delivery note into JSON lines."}
         ],
         functions=[fn_schema],
         function_call={"name":"parse_delivery_note","arguments": json.dumps({"image_base64": b64})},
     )
     args = resp.choices[0].message.function_call.arguments
     data = json.loads(args)
-    # on construit le DataFrame
     df = pd.DataFrame(data["lines"])
     df = df.rename(columns={
         "reference":"Référence",
@@ -78,7 +74,7 @@ def extract_table_via_gpt(img_bytes: bytes) -> pd.DataFrame:
     df["Vérification"] = ""
     return df
 
-# --- 4️⃣ Interface utilisateur ---
+# --- 4️⃣ UI & workflow ---
 with st.container():
     st.markdown('<div class="card"><div class="section-title">1️⃣ Import</div>', unsafe_allow_html=True)
     uploaded = st.file_uploader("PDF / Image / Excel (.xlsx)", type=["pdf","jpg","jpeg","png","xlsx"])
@@ -88,7 +84,6 @@ if uploaded:
     raw = uploaded.read()
     ext = uploaded.name.lower().split(".")[-1]
 
-    # Excel structuré
     if ext == "xlsx":
         df = pd.read_excel(io.BytesIO(raw))
         df = df.rename(columns={
@@ -98,14 +93,11 @@ if uploaded:
         })
         df["total"] = df["Nb de colis"] * df["pcs par colis"]
         df["Vérification"] = ""
-
-    # PDF ou Image → GPT-4 Vision
     else:
         img = pdf_to_image(raw) if ext=="pdf" else Image.open(io.BytesIO(raw))
         buf = io.BytesIO(); img.save(buf, format="PNG")
         df = extract_table_via_gpt(buf.getvalue())
 
-    # Affichage & export
     with st.container():
         st.markdown('<div class="card"><div class="section-title">2️⃣ Résultats</div>', unsafe_allow_html=True)
         st.dataframe(df, use_container_width=True)
@@ -122,3 +114,4 @@ if uploaded:
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
+      
