@@ -4,3 +4,4 @@ openai
 PyMuPDF
 Pillow
 openpyxl
+easyocr
