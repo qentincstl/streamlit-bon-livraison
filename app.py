@@ -51,11 +51,10 @@ def extract_images_from_pdf(pdf_bytes: bytes):
     return images
 
 def extract_json_with_gpt4o(img: Image.Image, prompt: str) -> str:
-    """Envoie une image à GPT-4o avec le prompt et renvoie toujours une chaîne."""
+    """Envoie une image à GPT-4o avec le prompt et récupère la réponse brute."""
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
-
     response = openai.chat.completions.create(
         model="gpt-4o",
         messages=[{
@@ -68,8 +67,7 @@ def extract_json_with_gpt4o(img: Image.Image, prompt: str) -> str:
         max_tokens=1500,
         temperature=0
     )
-    content = response.choices[0].message.content
-    return content if isinstance(content, str) else ""
+    return response.choices[0].message.content
 
 def extract_json_block(s: str) -> str:
     """Isole le plus grand bloc JSON (entre {} ou []) dans une chaîne."""
@@ -86,7 +84,7 @@ prompt = (
     "Ta mission : extraire, consolider et restituer la liste des produits reçus sous forme de tableau Excel.\n"
     "\n"
     "Procédure à suivre :\n"
-    "1. Lis chaque ligne du document et extraits les champs : Référence, Style, Marque, Produit, "
+    "1. Lis chaque ligne du document et extrais les champs : Référence, Style, Marque, Produit, "
     "Nombre de colis, Nombre de pièces par colis, Total de pièces.\n"
     "2. Si un même article est présent sur plusieurs lignes, additionne les colis et quantités.\n"
     "3. Vérifie avec un récapitulatif global si disponible et signale les écarts dans 'Alerte'.\n"
@@ -135,7 +133,7 @@ for i, img in enumerate(images):
     st.image(img, caption=f"Page {i+1}", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# 3. Extraction JSON avec protections renforcées
+# 3. Extraction JSON
 all_lignes = []
 st.markdown(
     '<div class="card"><div class="section-title">3. Extraction JSON</div>',
@@ -144,34 +142,13 @@ st.markdown(
 for i, img in enumerate(images):
     st.markdown(f"##### Analyse page {i+1} …")
     try:
-        # Appel à l'API, toujours string
-        output = extract_json_with_gpt4o(img, prompt) or ""
-
-        # 1) Rejet explicite du modèle
-        low = output.lower()
-        if "i'm sorry" in low or "je suis désolé" in low:
-            st.warning(f"⚠️ Page {i+1} : refus du modèle (« {output.strip()} »). Passage à la page suivante.")
-            continue
-
-        # 2) Pas de contenu exploitable
-        if not output.strip():
-            st.warning(f"⚠️ Page {i+1} n’a renvoyé aucun texte. Passage à la page suivante.")
-            continue
-
-        # 3) Extraction du bloc JSON avec gestion d'erreur
-        try:
-            output_clean = extract_json_block(output)
-        except ValueError:
-            st.error(f"❗️ Aucun JSON détecté en page {i+1} — sortie brute :\n{output}")
-            continue
-
-        # 4) Conversion en Python
+        output = extract_json_with_gpt4o(img, prompt)
+        st.code(output, language="json")
+        output_clean = extract_json_block(output)
         lignes = json.loads(output_clean)
         all_lignes.extend(lignes)
-
     except Exception as e:
         st.error(f"Erreur extraction page {i+1} : {e}")
-
 st.markdown('</div>', unsafe_allow_html=True)
 
 if not all_lignes:
