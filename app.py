@@ -26,67 +26,38 @@ def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
     pix = doc[0].get_pixmap(dpi=300)
     return Image.open(io.BytesIO(pix.tobytes("png")))
 
-def call_gpt4o_with_image(img: Image.Image):
+def extract_json_with_gpt4o(img: Image.Image):
     buf = io.BytesIO(); img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
 
-    fn_schema = {
-        "name": "extract_order_data",
-        "description": "Retourne un JSON : liste d'objets {reference, style, marque, produit, nb_colis, nb_pieces, total}",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "lignes": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "reference": {"type": "string"},
-                            "style": {"type": "string"},
-                            "marque": {"type": "string"},
-                            "produit": {"type": "string"},
-                            "nb_colis": {"type": "integer"},
-                            "nb_pieces": {"type": "integer"},
-                            "total": {"type": "number"}
-                        },
-                        "required": ["reference", "style", "marque", "produit", "nb_colis", "nb_pieces", "total"]
-                    }
-                }
-            },
-            "required": ["lignes"]
-        }
-    }
+    prompt = (
+        "Je vais uploader des bons de commande, et je souhaite que tu en extraies toutes les informations suivantes : "
+        "la référence, le style, la marque, le produit, le nombre de colis, le nombre de pièces, le total. "
+        "Ensuite, tu devras transformer ces données en un fichier Excel.\n\n"
+        "Le fichier Excel doit contenir une ligne par entrée extraite, avec les colonnes suivantes dans cet ordre :\n"
+        "- Référence (texte)\n- Style (texte)\n- Marque (texte)\n- Produit (texte)\n"
+        "- Nombre de colis (nombre entier)\n- Nombre de pièces (nombre entier)\n- Total (nombre entier ou décimal)\n\n"
+        "Si une information est absente d’un bon de commande, laisse la cellule correspondante vide dans le fichier Excel.\n"
+        "Réponds uniquement avec le JSON correspondant à une liste d’objets dans cet ordre de colonnes, sans texte additionnel. "
+        "Exemple :\n"
+        "[{\"Référence\": \"12345\", \"Style\": \"A\", \"Marque\": \"Nike\", \"Produit\": \"Chaussure\", \"Nombre de colis\": 3, \"Nombre de pièces\": 5, \"Total\": 15}, ...]"
+    )
 
-    resp = openai.chat.completions.create(
+    response = openai.chat.completions.create(
         model="gpt-4o",
-        temperature=0,
         messages=[
             {
-                "role": "system",
-                "content":
-"""Je vais uploader des bons de commande, et je souhaite que tu en extraies toutes les informations suivantes : la référence, le style, la marque, le produit, le nombre de colis, le nombre de pièces, le total. Ensuite, tu devras transformer ces données en un fichier Excel.
-
-## Output Format
-Le fichier Excel doit contenir une ligne par entrée extraite, avec les colonnes suivantes dans cet ordre :
-- Référence (texte)
-- Style (texte)
-- Marque (texte)
-- Produit (texte)
-- Nombre de colis (nombre entier)
-- Nombre de pièces (nombre entier)
-- Total (nombre entier ou décimal)
-
-Si une information est absente d’un bon de commande, laisse la cellule correspondante vide dans le fichier Excel."""
-            },
-            {
                 "role": "user",
-                "content": "Lis ce document et retourne le JSON structuré."
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+                ]
             }
         ],
-        functions=[fn_schema],
-        function_call={"name": "extract_order_data", "arguments": json.dumps({"image_base64": b64})}
+        max_tokens=1500,
+        temperature=0
     )
-    return resp
+    return response.choices[0].message.content
 
 # --- INTERFACE ---
 st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
@@ -109,27 +80,17 @@ st.markdown('<div class="card"><div class="section-title">2. Aperçu</div>', uns
 st.image(img, use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-st.markdown('<div class="card"><div class="section-title">3. Extraction & JSON brut</div>', unsafe_allow_html=True)
+st.markdown('<div class="card"><div class="section-title">3. Extraction JSON</div>', unsafe_allow_html=True)
 try:
-    resp = call_gpt4o_with_image(img)
-    raw_json = resp.choices[0].message.function_call.arguments
-    st.code(raw_json, language="json")
+    output = extract_json_with_gpt4o(img)
+    st.code(output, language="json")
 except Exception as e:
     st.error(f"Erreur appel API : {e}")
     st.stop()
 st.markdown('</div>', unsafe_allow_html=True)
 
 try:
-    lignes = json.loads(raw_json)['lignes']
-    df = pd.DataFrame(lignes).rename(columns={
-        'reference': 'Référence',
-        'style': 'Style',
-        'marque': 'Marque',
-        'produit': 'Produit',
-        'nb_colis': 'Nombre de colis',
-        'nb_pieces': 'Nombre de pièces',
-        'total': 'Total'
-    })
+    df = pd.DataFrame(json.loads(output))
 except Exception as e:
     st.error(f"Erreur lors du parsing JSON : {e}")
     st.stop()
