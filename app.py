@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import openai, io, json, base64, hashlib
-import fitz               # PyMuPDF
+import fitz  # PyMuPDF
 from PIL import Image
 
 # --- PAGE CONFIGURATION ---
@@ -14,6 +14,7 @@ st.markdown("""
   .debug { font-size:0.9rem; color:#888; }
 </style>
 """, unsafe_allow_html=True)
+st.markdown("**Version du code : v2**", unsafe_allow_html=True)
 st.markdown("<h1 class=\"section-title\">Fiche de réception (OCR via GPT-4o Vision)</h1>", unsafe_allow_html=True)
 
 # --- OpenAI KEY ---
@@ -30,9 +31,8 @@ def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
     pix = doc[0].get_pixmap(dpi=300)
     return Image.open(io.BytesIO(pix.tobytes("png")))
 
-@st.cache_data(show_spinner=False)
-def call_gpt4o_with_image(_img: Image.Image):
-    buf = io.BytesIO(); _img.save(buf, format="PNG")
+def call_gpt4o_with_image(img: Image.Image):
+    buf = io.BytesIO(); img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
 
     fn_schema = {
