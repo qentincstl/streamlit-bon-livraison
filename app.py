@@ -1,11 +1,22 @@
 import streamlit as st
 import pandas as pd
-import openai, io, json, base64, hashlib, re
-import fitz             # PyMuPDF
+import openai
+import io
+import json
+import base64
+import hashlib
+import fitz
 from PIL import Image
+import re
 
-# --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
+# Configuration de la page
+st.set_page_config(
+    page_title="Fiche de réception",
+    layout="wide",
+    page_icon="📋"
+)
+
+# CSS personnalisé
 st.markdown("""
 <style>
   .section-title { font-size:1.6rem; color:#005b96; margin-bottom:0.5rem; }
@@ -14,135 +25,159 @@ st.markdown("""
   .debug { font-size:0.9rem; color:#888; }
 </style>
 """, unsafe_allow_html=True)
-st.markdown("<h1 class=\"section-title\">Fiche de réception (OCR multi-pages via GPT-4o)</h1>", unsafe_allow_html=True)
 
-# --- OPENAI KEY ---
+st.markdown(
+    '<h1 class="section-title">Fiche de réception (OCR multi-pages via GPT-4o Vision)</h1>',
+    unsafe_allow_html=True
+)
+
+# Clé API OpenAI depuis les secrets Streamlit
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 if not OPENAI_API_KEY:
-    st.error("🛑 Ajoutez `OPENAI_API_KEY` dans les Secrets.")
+    st.error("🛑 Ajoutez `OPENAI_API_KEY` dans les Secrets de Streamlit Cloud.")
     st.stop()
 openai.api_key = OPENAI_API_KEY
 
-# --- UTILITAIRES ---
+# --- Fonctions utilitaires ---
+
 def extract_images_from_pdf(pdf_bytes: bytes):
-    imgs = []
+    """Extrait chaque page du PDF en tant qu'image PIL."""
+    images = []
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     for page in doc:
         pix = page.get_pixmap(dpi=300)
-        imgs.append(Image.open(io.BytesIO(pix.tobytes("png"))))
-    return imgs
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        images.append(img)
+    return images
 
-
-def downscale_image(img: Image.Image, max_width=800) -> Image.Image:
-    w, h = img.size
-    if w <= max_width:
-        return img
-    ratio = max_width / float(w)
-    new_h = int(h * ratio)
-    return img.resize((max_width, new_h), Image.LANCZOS)
-
+def extract_json_with_gpt4o(img: Image.Image, prompt: str) -> str:
+    """Envoie une image à GPT-4o avec le prompt et récupère la réponse brute."""
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    response = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+            ]
+        }],
+        max_tokens=1500,
+        temperature=0
+    )
+    return response.choices[0].message.content
 
 def extract_json_block(s: str) -> str:
-    m = re.findall(r'(\[.*?\]|\{.*?\})', s, flags=re.DOTALL)
-    if not m:
-        raise ValueError("Aucun JSON trouvé.")
-    return max(m, key=len)
+    """Isole le plus grand bloc JSON (entre {} ou []) dans une chaîne."""
+    json_regex = re.compile(r'(\[.*?\]|\{.*?\})', re.DOTALL)
+    matches = json_regex.findall(s)
+    if not matches:
+        raise ValueError("Aucun JSON trouvé dans la sortie du modèle.")
+    return max(matches, key=len)
 
-
-def call_gpt4o_with_image(img: Image.Image, prompt: str) -> str:
-    buf = io.BytesIO(); img.save(buf, format="PNG")
-    b64 = base64.b64encode(buf.getvalue()).decode()
-    content = prompt + "\n\n[IMAGE_BASE64]\n" + b64
-    res = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": content}
-        ],
-        temperature=0,
-        max_tokens=1500
-    )
-    return res.choices[0].message.content
-
-# --- TON PROMPT MÉTIER ---
+# Prompt pour GPT-4o
 prompt = (
     "Tu es un assistant expert en logistique.\n"
-    "Tu reçois un bon de livraison PDF (plusieurs pages).\n"
-    "Ta mission : extraire et consolider la liste des produits reçus.\n"
-    "Pour chaque produit, retourne un objet JSON avec ces champs :\n"
-    "  - Référence (texte)\n"
-    "  - EAN (texte)\n"
-    "  - Style (texte)\n"
-    "  - Marque (texte)\n"
-    "  - Produit (texte)\n"
-    "  - Nombre de colis (entier)\n"
-    "  - Nombre de pièces (entier)\n"
-    "  - Total (entier)\n"
-    "  - Alerte (texte)\n"
-    "1) Lis toutes les pages (image) et tous les tableaux.\n"
-    "2) Si un même article apparaît plusieurs fois, fais la somme des colis et pièces.\n"
-    "3) Ignore les dimensions, poids, batch, etc.\n"
-    "4) Si le document contient un total global, utilise-le pour vérifier et note tout écart dans 'Alerte'.\n"
-    "Réponds SEULEMENT par un JSON array.\n"
-    "Exemple :\n"
-    "[{\"Référence\":\"525017\",\"EAN\":\"3564700012591\"," +
-    "\"Style\":\"\",\"Marque\":\"\",\"Produit\":\"Muffins Chocolat\"," +
-    "\"Nombre de colis\":12,\"Nombre de pièces\":96,\"Total\":816,\"Alerte\":\"\"}]"
+    "Tu reçois un bon de livraison PDF, souvent sur plusieurs pages.\n"
+    "Ta mission : extraire, consolider et restituer la liste des produits reçus sous forme de tableau Excel.\n"
+    "\n"
+    "Procédure à suivre :\n"
+    "1. Lis chaque ligne du document et extrais les champs : Référence, Style, Marque, Produit, "
+    "Nombre de colis, Nombre de pièces par colis, Total de pièces.\n"
+    "2. Si un même article est présent sur plusieurs lignes, additionne les colis et quantités.\n"
+    "3. Vérifie avec un récapitulatif global si disponible et signale les écarts dans 'Alerte'.\n"
+    "4. Ignore les dimensions, poids, batch, etc.\n"
+    "5. Formate la sortie en JSON array comme suit :\n"
+    "[{\"Référence\": \"525017\", \"Style\": \"\", \"Marque\": \"\", "
+    "\"Produit\": \"Muffins Chocolat\", \"Nombre de colis\": 12, "
+    "\"Nombre de pièces\": 96, \"Total\": 816, \"Alerte\": \"\"}]\n"
+    "Réponds uniquement par ce JSON, sans aucun texte supplémentaire."
 )
 
-# --- UI STREAMLIT ---
-st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
-uploaded = st.file_uploader("Importez votre PDF multi-pages ou une image", type=["pdf","jpg","png"])
+# --- Interface utilisateur ---
+
+# 1. Import du document
+st.markdown(
+    '<div class="card"><div class="section-title">1. Import du document</div></div>',
+    unsafe_allow_html=True
+)
+uploaded = st.file_uploader(
+    "Importez votre PDF (plusieurs pages) ou photo de bon de commande",
+    key="file_uploader"
+)
 if not uploaded:
     st.stop()
 
 file_bytes = uploaded.getvalue()
 hash_md5 = hashlib.md5(file_bytes).hexdigest()
-st.markdown(f'<div class="debug">Fichier : {uploaded.name} — Hash MD5 : {hash_md5}</div>', unsafe_allow_html=True)
+st.markdown(
+    f'<div class="debug">Fichier : {uploaded.name} — Hash MD5 : {hash_md5}</div>',
+    unsafe_allow_html=True
+)
 
-# Extraction images
-ext = uploaded.name.lower().rsplit(".",1)[-1]
-images = extract_images_from_pdf(file_bytes) if ext=="pdf" else [Image.open(io.BytesIO(file_bytes))]
+# Extraction des images
+ext = uploaded.name.lower().rsplit('.', 1)[-1]
+if ext == 'pdf':
+    images = extract_images_from_pdf(file_bytes)
+else:
+    images = [Image.open(io.BytesIO(file_bytes))]
 
-# Aperçu
-st.markdown('<div class="card"><div class="section-title">2. Aperçu</div>', unsafe_allow_html=True)
+# 2. Aperçu du document
+st.markdown(
+    '<div class="card"><div class="section-title">2. Aperçu du document</div>',
+    unsafe_allow_html=True
+)
 for i, img in enumerate(images):
-    img_small = downscale_image(img)
-    st.image(img_small, caption=f"Page {i+1}", use_container_width=True)
+    st.image(img, caption=f"Page {i+1}", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Extraction & parsing
-all_lines = []
-st.markdown('<div class="card"><div class="section-title">3. Extraction JSON</div>', unsafe_allow_html=True)
+# 3. Extraction JSON
+all_lignes = []
+st.markdown(
+    '<div class="card"><div class="section-title">3. Extraction JSON</div>',
+    unsafe_allow_html=True
+)
 for i, img in enumerate(images):
-    st.markdown(f"##### Analyse page {i+1}")
+    st.markdown(f"##### Analyse page {i+1} …")
     try:
-        img_small = downscale_image(img)
-        out = call_gpt4o_with_image(img_small, prompt)
-        st.code(out, language="json")
-        clean = extract_json_block(out)
-        lines = json.loads(clean)
-        all_lines.extend(lines)
+        output = extract_json_with_gpt4o(img, prompt)
+        st.code(output, language="json")
+        output_clean = extract_json_block(output)
+        lignes = json.loads(output_clean)
+        all_lignes.extend(lignes)
     except Exception as e:
-        st.error(f"Erreur page {i+1} : {e}")
+        st.error(f"Erreur extraction page {i+1} : {e}")
 st.markdown('</div>', unsafe_allow_html=True)
 
-if not all_lines:
-    st.error("Aucune donnée extraite.")
+if not all_lignes:
+    st.error("Aucune donnée n'a été extraite du document.")
     st.stop()
 
-# Résultats
-df = pd.DataFrame(all_lines)
-st.markdown('<div class="card"><div class="section-title">4. Résultats</div>', unsafe_allow_html=True)
+# 4. Affichage des résultats
+df = pd.DataFrame(all_lignes)
+st.markdown(
+    '<div class="card"><div class="section-title">4. Résultats</div>',
+    unsafe_allow_html=True
+)
 st.dataframe(df, use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Export Excel
-st.markdown('<div class="card"><div class="section-title">5. Export Excel</div>', unsafe_allow_html=True)
-buf = io.BytesIO()
-with pd.ExcelWriter(buf, engine="openpyxl") as w:
-    df.to_excel(w, index=False, sheet_name="BON_DE_LIVRAISON")
-buf.seek(0)
-st.download_button("Télécharger Excel", data=buf, file_name="bon_de_livraison.xlsx",
-                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                   use_container_width=True)
+# 5. Export Excel
+st.markdown(
+    '<div class="card"><div class="section-title">5. Export Excel</div>',
+    unsafe_allow_html=True
+)
+out = io.BytesIO()
+with pd.ExcelWriter(out, engine="openpyxl") as writer:
+    df.to_excel(writer, index=False, sheet_name="BON_DE_LIVRAISON")
+out.seek(0)
+st.download_button(
+    "Télécharger le fichier Excel",
+    data=out,
+    file_name="bon_de_livraison.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True
+)
 st.markdown('</div>', unsafe_allow_html=True)
