@@ -135,7 +135,7 @@ for i, img in enumerate(images):
     st.image(img, caption=f"Page {i+1}", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# 3. Extraction JSON avec protections
+# 3. Extraction JSON avec protections renforcées
 all_lignes = []
 st.markdown(
     '<div class="card"><div class="section-title">3. Extraction JSON</div>',
@@ -146,18 +146,26 @@ for i, img in enumerate(images):
     try:
         # Appel à l'API, toujours string
         output = extract_json_with_gpt4o(img, prompt) or ""
+
+        # 1) Rejet explicite du modèle
+        low = output.lower()
+        if "i'm sorry" in low or "je suis désolé" in low:
+            st.warning(f"⚠️ Page {i+1} : refus du modèle (« {output.strip()} »). Passage à la page suivante.")
+            continue
+
+        # 2) Pas de contenu exploitable
         if not output.strip():
             st.warning(f"⚠️ Page {i+1} n’a renvoyé aucun texte. Passage à la page suivante.")
             continue
 
-        # Extraction du bloc JSON avec gestion d'erreur
+        # 3) Extraction du bloc JSON avec gestion d'erreur
         try:
             output_clean = extract_json_block(output)
         except ValueError:
             st.error(f"❗️ Aucun JSON détecté en page {i+1} — sortie brute :\n{output}")
             continue
 
-        # Conversion en Python
+        # 4) Conversion en Python
         lignes = json.loads(output_clean)
         all_lignes.extend(lignes)
 
