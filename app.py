@@ -15,9 +15,22 @@ st.markdown("""
 """, unsafe_allow_html=True)
 st.markdown('<h1 class="section-title">📥 Fiche de réception (GPT-4 Vision)</h1>', unsafe_allow_html=True)
 
+
 # --- 1️⃣ Init OpenAI ---
-OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
-if not OPENAI_API_KEY:
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+openai.api_key = OPENAI_API_KEY
+
+# ─── Bloc de test ─────────────────────────────────────────────────────────────
+if st.button("🧪 Test texte GPT-4"):
+    resp = openai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role":"user","content":"Hello, combien de tokens ce message utilise ?"}]
+    )
+    st.json({ "usage": resp.usage, "reply": resp.choices[0].message.content })
+    st.stop()
+# ────────────────────────────────────────────────────────────────────────────────
+
+# --- 2️⃣ Le reste de ton code (upload, OCR, etc.) ---
     st.error("🛑 Définis `OPENAI_API_KEY` dans les Secrets.")
     st.stop()
 openai.api_key = OPENAI_API_KEY
