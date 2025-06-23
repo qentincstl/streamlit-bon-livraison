@@ -94,6 +94,7 @@ Retourne uniquement le JSON au format suivant :
   ]
 }
 """},
+)
 # --- INTERFACE ---
 st.markdown('<div class="card"><div class="section-title">1. Import du document</div></div>', unsafe_allow_html=True)
 uploaded = st.file_uploader("Importez votre PDF (plusieurs pages) ou photo de bon de commande", key="file_uploader")
