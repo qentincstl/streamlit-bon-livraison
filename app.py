@@ -60,16 +60,29 @@ def extract_json_block(s):
     return max(matches, key=len)
 
 prompt = (
-    "Je vais uploader des bons de commande, et je souhaite que tu en extraies toutes les informations suivantes : "
-    "la référence, le style, la marque, le produit, le nombre de colis, le nombre de pièces, le total. "
-    "Ensuite, tu devras transformer ces données en un fichier Excel.\n\n"
-    "Le fichier Excel doit contenir une ligne par entrée extraite, avec les colonnes suivantes dans cet ordre :\n"
-    "- Référence (texte)\n- Style (texte)\n- Marque (texte)\n- Produit (texte)\n"
-    "- Nombre de colis (nombre entier)\n- Nombre de pièces (nombre entier)\n- Total (nombre entier ou décimal)\n\n"
-    "Si une information est absente d’un bon de commande, laisse la cellule correspondante vide dans le fichier Excel.\n"
-    "Réponds uniquement avec le JSON correspondant à une liste d’objets dans cet ordre de colonnes, sans texte additionnel. "
-    "Exemple :\n"
-    "[{\"Référence\": \"12345\", \"Style\": \"A\", \"Marque\": \"Nike\", \"Produit\": \"Chaussure\", \"Nombre de colis\": 3, \"Nombre de pièces\": 5, \"Total\": 15}, ...]"
+    prompt = (
+    "Tu es un assistant expert en logistique.\n"
+    "Tu reçois un bon de livraison PDF, souvent sur plusieurs pages.\n"
+    "Ta mission : extraire, consolider et restituer la liste des produits reçus sous forme de tableau Excel.\n"
+    "\n"
+    "Procédure à suivre :\n"
+    "1. Lis chaque ligne du document et extrais toutes les informations suivantes si disponibles : Référence (code article), Style, Marque, Produit (désignation), Nombre de colis, Nombre de pièces par colis, Total de pièces.\n"
+    "2. Si un même article (même référence, EAN, ou nom de produit) est présent sur plusieurs lignes (par exemple, réparti sur plusieurs palettes ou colis), additionne les colis et les quantités.\n"
+    "3. Si le document contient un récapitulatif global (ex : Total units, Nb colis), utilise-le pour corriger ou vérifier tes sommes. Si tu détectes un écart, indique-le dans un champ 'Alerte'.\n"
+    "4. Ignore les informations non pertinentes (dimension, poids, batch, customs, etc).\n"
+    "5. Le résultat final doit être une liste d’objets, un par produit, avec les colonnes suivantes dans cet ordre :\n"
+    "    - Référence (texte)\n"
+    "    - Style (texte)\n"
+    "    - Marque (texte)\n"
+    "    - Produit (texte)\n"
+    "    - Nombre de colis (entier)\n"
+    "    - Nombre de pièces (entier)\n"
+    "    - Total (entier)\n"
+    "    - Alerte (texte)\n"
+    "Si une information est absente du document, laisse la cellule vide.\n"
+    "Réponds uniquement par un JSON array, par exemple :\n"
+    "[{\"Référence\": \"525017\", \"Style\": \"\", \"Marque\": \"\", \"Produit\": \"Muffins Chocolat\", \"Nombre de colis\": 12, \"Nombre de pièces\": 96, \"Total\": 816, \"Alerte\": \"\"}]\n"
+    "N’ajoute aucun texte autour, ne mets rien avant/après le JSON."
 )
 
 # --- INTERFACE ---
