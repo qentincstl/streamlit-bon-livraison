@@ -1,39 +1,28 @@
 import streamlit as st
 import pandas as pd
 import openai, io, json, base64
-import fitz               # PyMuPDF
+import fitz
 from PIL import Image
 
 # --- 0️⃣ Config page & style ---
 st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
-st.markdown("""
-<style>
-  .card { background:white; padding:1.5rem; border-radius:0.5rem;
-          box-shadow:0 4px 6px rgba(0,0,0,0.1); margin-bottom:2rem;}
-  .section-title { font-size:1.6rem; color:#4A90E2; margin-bottom:0.5rem;}
-</style>
-""", unsafe_allow_html=True)
-st.markdown('<div class="section-title">📥 Documents de réception → FICHE DE RÉCEPTION</div>', unsafe_allow_html=True)
 
 # --- 1️⃣ Clé OpenAI ---
-OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY","")
-if not OPENAI_API_KEY:
-    st.error("🛑 Ajoute ta clé OPENAI_API_KEY dans les Secrets.")
-    st.stop()
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 openai.api_key = OPENAI_API_KEY
 
-# --- 2️⃣ PDF→Image helper ---
+# --- 2️⃣ PDF→Image ---
 def pdf_to_image(pdf_bytes: bytes) -> Image.Image:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pix = doc[0].get_pixmap(dpi=300)
     return Image.open(io.BytesIO(pix.tobytes("png")))
 
-# --- 3️⃣ Extraction via GPT-4 Vision + JSON parsing ---
+# --- 3️⃣ Extraction table via GPT-4 Vision + Functions v2 ---
 def extract_table_via_gpt(img_bytes: bytes) -> pd.DataFrame:
     b64 = base64.b64encode(img_bytes).decode()
     fn_schema = {
         "name": "parse_delivery_note",
-        "description": "Retourne la liste des lignes avec reference, nb_colis et pcs_par_colis",
+        "description": "Retourne la liste des lignes {reference, nb_colis, pcs_par_colis}",
         "parameters": {
             "type": "object",
             "properties": {
@@ -53,17 +42,18 @@ def extract_table_via_gpt(img_bytes: bytes) -> pd.DataFrame:
             "required": ["lines"]
         }
     }
-    resp = openai.ChatCompletion.create(
-        model="gpt-4o-mini",
+
+    resp = openai.chat.completions.create(
+        model="gpt-4o-mini",  # ou "gpt-4-vision-preview"
         messages=[
-            {"role":"system","content":"Tu es un OCR-table-parser, retourne juste du JSON structuré."},
-            {"role":"user","content":"Parse this delivery note into JSON lines."}
+            {"role":"system","content":"Tu es un OCR-table-parser, renvoie strictement du JSON."},
+            {"role":"user","content":"Analyse cette image et retourne JSON."}
         ],
         functions=[fn_schema],
-        function_call={"name":"parse_delivery_note","arguments": json.dumps({"image_base64": b64})},
+        function_call={"name":"parse_delivery_note","arguments": json.dumps({"image_base64": b64})}
     )
-    args = resp.choices[0].message.function_call.arguments
-    data = json.loads(args)
+    func_args = resp.choices[0].message.function_call.arguments
+    data = json.loads(func_args)
     df = pd.DataFrame(data["lines"])
     df = df.rename(columns={
         "reference":"Référence",
@@ -74,44 +64,33 @@ def extract_table_via_gpt(img_bytes: bytes) -> pd.DataFrame:
     df["Vérification"] = ""
     return df
 
-# --- 4️⃣ UI & workflow ---
-with st.container():
-    st.markdown('<div class="card"><div class="section-title">1️⃣ Import</div>', unsafe_allow_html=True)
-    uploaded = st.file_uploader("PDF / Image / Excel (.xlsx)", type=["pdf","jpg","jpeg","png","xlsx"])
-    st.markdown('</div>', unsafe_allow_html=True)
+# --- 4️⃣ UI & workflow réduit pour l’exemple ---
+st.title("📥 Fiche de réception (GPT-4 Vision)")
 
+uploaded = st.file_uploader("PDF / Image", type=["pdf","jpg","jpeg","png"])
 if uploaded:
     raw = uploaded.read()
-    ext = uploaded.name.lower().split(".")[-1]
+    ext = uploaded.name.rsplit(".",1)[-1].lower()
 
-    if ext == "xlsx":
-        df = pd.read_excel(io.BytesIO(raw))
-        df = df.rename(columns={
-            df.columns[0]:"Référence",
-            df.columns[1]:"Nb de colis",
-            df.columns[2]:"pcs par colis"
-        })
-        df["total"] = df["Nb de colis"] * df["pcs par colis"]
-        df["Vérification"] = ""
+    if ext == "pdf":
+        img = pdf_to_image(raw)
     else:
-        img = pdf_to_image(raw) if ext=="pdf" else Image.open(io.BytesIO(raw))
-        buf = io.BytesIO(); img.save(buf, format="PNG")
-        df = extract_table_via_gpt(buf.getvalue())
+        img = Image.open(io.BytesIO(raw))
 
-    with st.container():
-        st.markdown('<div class="card"><div class="section-title">2️⃣ Résultats</div>', unsafe_allow_html=True)
-        st.dataframe(df, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    st.image(img, caption="🔍 Image traitée", use_column_width=True)
 
-    with st.container():
-        st.markdown('<div class="card"><div class="section-title">3️⃣ Export Excel</div>', unsafe_allow_html=True)
-        out = io.BytesIO()
-        with pd.ExcelWriter(out, engine="openpyxl") as w:
-            df.to_excel(w, index=False, sheet_name="FICHE_DE_RECEPTION")
-        out.seek(0)
-        st.download_button("📥 Télécharger la fiche", data=out,
-                           file_name="fiche_de_reception.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                           use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-      
+    df = extract_table_via_gpt(buf.getvalue())
+    st.dataframe(df, use_container_width=True)
+
+    bufxlsx = io.BytesIO()
+    with pd.ExcelWriter(bufxlsx, engine="openpyxl") as w:
+        df.to_excel(w, index=False, sheet_name="FICHE_DE_RECEPTION")
+    bufxlsx.seek(0)
+    st.download_button(
+        "📥 Télécharger Excel",
+        data=bufxlsx,
+        file_name="fiche_de_reception.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
