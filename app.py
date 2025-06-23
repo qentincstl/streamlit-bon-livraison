@@ -4,7 +4,7 @@ import openai, io, json, base64, time
 import fitz               # PyMuPDF
 from PIL import Image
 
-# --- 0️⃣ Config page & style ---
+# --- 0️⃣ Configuration page & style ---
 st.set_page_config(page_title="Fiche de réception", layout="wide", page_icon="📋")
 st.markdown("""
 <style>
@@ -68,7 +68,6 @@ def extract_table_via_gpt(img_bytes: bytes) -> pd.DataFrame:
                     "arguments": json.dumps({"image_base64": b64})
                 }
             )
-            # Lecture de la réponse
             args = resp.choices[0].message.function_call.arguments
             data = json.loads(args)
             df = pd.DataFrame(data["lines"])
@@ -84,14 +83,12 @@ def extract_table_via_gpt(img_bytes: bytes) -> pd.DataFrame:
         except Exception as e:
             if attempt == 2:
                 st.error(f"❌ OCR failed: {e}")
-                return pd.DataFrame(
-                    columns=["Référence","Nb de colis","pcs par colis","total","Vérification"]
-                )
+                return pd.DataFrame(columns=["Référence","Nb de colis","pcs par colis","total","Vérification"])
             wait = 2 ** attempt
             st.warning(f"Erreur ({e.__class__.__name__}), retry dans {wait}s… ({attempt+1}/3)")
             time.sleep(wait)
 
-# --- 4️⃣ UI & workflow ---
+# --- 4️⃣ Interface & workflow ---
 uploaded = st.file_uploader("🗂️ Téléversez un PDF (1 page) ou une image", type=["pdf","jpg","jpeg","png"])
 if uploaded:
     raw = uploaded.read()
@@ -109,7 +106,8 @@ if uploaded:
     st.markdown('</div>', unsafe_allow_html=True)
 
     # OCR & parse
-    buf = io.BytesIO(); img.save(buf, format="PNG")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
     df = extract_table_via_gpt(buf.getvalue())
 
     # Show table
@@ -118,4 +116,16 @@ if uploaded:
     st.markdown('</div>', unsafe_allow_html=True)
 
     # Export Excel
-    st.mark
+    st.markdown('<div class="card"><div class="section-title">💾 Export Excel</div>', unsafe_allow_html=True)
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="FICHE_DE_RECEPTION")
+    out.seek(0)
+    st.download_button(
+        "📥 Télécharger la fiche",
+        data=out,
+        file_name="fiche_de_reception.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
