@@ -50,7 +50,6 @@ def extract_images_from_pdf(pdf_bytes: bytes):
         images.append(img)
     return images
 
-
 def extract_json_with_gpt4o(img: Image.Image, prompt: str) -> str:
     """Envoie une image à GPT-4o avec le prompt et récupère la réponse brute."""
     buf = io.BytesIO()
@@ -70,11 +69,9 @@ def extract_json_with_gpt4o(img: Image.Image, prompt: str) -> str:
     )
     return response.choices[0].message.content
 
-
 def extract_json_block(s: str) -> str:
     """Isole le plus grand bloc JSON (entre {} ou []) dans une chaîne."""
-    json_regex = re.compile(r'(
-(?:\[.*?\]|\{.*?\}))', re.DOTALL)
+    json_regex = re.compile(r'(\[.*?\]|\{.*?\})', re.DOTALL)
     matches = json_regex.findall(s)
     if not matches:
         raise ValueError("Aucun JSON trouvé dans la sortie du modèle.")
@@ -144,7 +141,6 @@ st.markdown(
 )
 for i, img in enumerate(images):
     st.markdown(f"##### Analyse page {i+1} …")
-    # Nouvelle logique avec tentative et retry automatique
     try:
         output = extract_json_with_gpt4o(img, prompt)
         output_clean = extract_json_block(output)
@@ -153,10 +149,7 @@ for i, img in enumerate(images):
         output = extract_json_with_gpt4o(img, prompt)
         output_clean = extract_json_block(output)
 
-    # Affiche la réponse JSON brute
     st.code(output, language="json")
-
-    # Parse et collecte les lignes
     try:
         lignes = json.loads(output_clean)
         all_lignes.extend(lignes)
@@ -169,7 +162,6 @@ if not all_lignes:
     st.stop()
 
 # 4. Affichage des résultats
-```python
 df = pd.DataFrame(all_lignes)
 st.markdown(
     '<div class="card"><div class="section-title">4. Résultats</div>',
@@ -177,7 +169,7 @@ st.markdown(
 )
 st.dataframe(df, use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
-```
+
 # 5. Export Excel
 st.markdown(
     '<div class="card"><div class="section-title">5. Export Excel</div>',
