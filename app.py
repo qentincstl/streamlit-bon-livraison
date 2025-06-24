@@ -141,25 +141,30 @@ st.markdown(
 )
 for i, img in enumerate(images):
     st.markdown(f"##### Analyse page {i+1} …")
-    try:
-        output = extract_json_with_gpt4o(img, prompt)
-        output_clean = extract_json_block(output)
-    except Exception:
-        st.warning("❗Première tentative échouée, nouvelle tentative en cours…")
-        output = extract_json_with_gpt4o(img, prompt)
-        output_clean = extract_json_block(output)
+    success = False
+    output, output_clean = None, None
 
-    st.code(output, language="json")
+    for attempt in range(1, 4):  # Jusqu'à 3 tentatives
+        try:
+            output = extract_json_with_gpt4o(img, prompt)
+            output_clean = extract_json_block(output)
+            success = True
+            break  # On sort de la boucle si succès
+        except Exception:
+            st.warning(f"❗Tentative {attempt} échouée sur la page {i+1}. Nouvelle tentative…")
+    
+    st.code(output or "Aucune réponse retournée", language="json")
+
+    if not success:
+        st.error(f"Échec extraction JSON après 3 essais sur la page {i+1}.\nTexte brut retourné :\n{output}")
+        continue  # Passe à la page suivante sans planter
+
     try:
         lignes = json.loads(output_clean)
         all_lignes.extend(lignes)
     except Exception as e:
         st.error(f"Erreur parsing JSON page {i+1} : {e}")
 st.markdown('</div>', unsafe_allow_html=True)
-
-if not all_lignes:
-    st.error("Aucune donnée n'a été extraite du document.")
-    st.stop()
 
 # 4. Affichage des résultats
 df = pd.DataFrame(all_lignes)
