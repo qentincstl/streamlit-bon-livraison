@@ -144,20 +144,21 @@ for i, img in enumerate(images):
     success = False
     output, output_clean = None, None
 
-    for attempt in range(1, 4):  # Jusqu'à 3 tentatives
-        try:
-            output = extract_json_with_gpt4o(img, prompt)
-            output_clean = extract_json_block(output)
-            success = True
-            break  # On sort de la boucle si succès
-        except Exception:
-            st.warning(f"❗Tentative {attempt} échouée sur la page {i+1}. Nouvelle tentative…")
-    
+    with st.spinner("Analyse en cours... (jusqu'à 6 essais automatiques)"):
+        for attempt in range(1, 7):  # 6 tentatives
+            try:
+                output = extract_json_with_gpt4o(img, prompt)
+                output_clean = extract_json_block(output)
+                success = True
+                break  # Succès, on sort
+            except Exception:
+                pass  # On retente
+
     st.code(output or "Aucune réponse retournée", language="json")
 
     if not success:
-        st.error(f"Échec extraction JSON après 3 essais sur la page {i+1}.\nTexte brut retourné :\n{output}")
-        continue  # Passe à la page suivante sans planter
+        st.error(f"Échec extraction JSON après 6 essais sur la page {i+1}. Texte brut retourné :\n{output}")
+        continue
 
     try:
         lignes = json.loads(output_clean)
